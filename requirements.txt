@@ -1,0 +1,6 @@
+Flask>=3.0
+PyYAML>=6.0
+qrcode[pil]>=7.4        # /join 설치안내 QR
+gunicorn>=21.2          # 클라우드 배포용 WSGI 서버 (로컬 실행에는 불필요)
+# 선택: 2FA(TOTP) 사용 시
+pyotp>=2.9

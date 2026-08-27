@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0b1220">
+  <title>앱 설치 · {{ site.name }}</title>
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" type="image/png" sizes="192x192" href="{{ url_for('static', filename='icons/icon-192.png') }}">
+  <link rel="apple-touch-icon" href="{{ url_for('static', filename='icons/apple-touch-icon.png') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body class="login-body">
+  <div class="login-card" style="max-width:420px">
+    <h1>{{ site.name }}</h1>
+    <p class="sub">핸드폰에 앱으로 설치</p>
+
+    <div style="background:#fff;border-radius:12px;padding:14px;display:flex;justify-content:center">
+      <img src="/qr.png" alt="접속 QR" width="240" height="240" style="display:block">
+    </div>
+    <p style="text-align:center;font-size:13px;color:var(--dim);word-break:break-all">{{ url }}</p>
+
+    {% if not is_https %}
+    <div class="err" style="font-size:12px">
+      지금은 <b>http</b> 주소라 "앱 설치" 프롬프트는 안 뜨고 홈화면 바로가기만 됩니다.
+      정식 설치는 HTTPS 필요 (Tailscale / ngrok / 사내 도메인).
+    </div>
+    {% endif %}
+
+    <div style="font-size:13px;line-height:1.7">
+      <b>아이폰 (Safari)</b><br>
+      QR 스캔 → 하단 공유 <b>□↑</b> → <b>홈 화면에 추가</b>
+      <div style="height:8px"></div>
+      <b>안드로이드 (Chrome)</b><br>
+      QR 스캔 → 메뉴 <b>⋮</b> → <b>앱 설치</b>{% if not is_https %} / 홈 화면에 추가{% endif %}
+    </div>
+
+    <a href="/login" class="btn ok" style="text-align:center;text-decoration:none">바로 로그인</a>
+    <p class="hint">계정: admin / admin1234 · operator / operator1234 · viewer / viewer1234</p>
+  </div>
+</body>
+</html>

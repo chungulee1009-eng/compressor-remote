@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}알람 · {{ site.name }}{% endblock %}
+{% block body %}
+<div class="page-head">
+  <h1>알람</h1>
+  <div class="range-tabs" id="alarm-tabs">
+    <button data-s="open" class="active">발생 중</button>
+    <button data-s="all">전체 이력</button>
+  </div>
+</div>
+<div id="alarm_table" class="alarm-list">불러오는 중…</div>
+
+<section class="panel">
+  <h2>알림 발송 이력 (푸시 / SMS)</h2>
+  <div id="notif_table" class="alarm-list">–</div>
+</section>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/common.js') }}"></script>
+<script src="{{ url_for('static', filename='js/alarms.js') }}"></script>
+{% endblock %}

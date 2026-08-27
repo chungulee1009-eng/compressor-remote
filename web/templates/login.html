@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0b1220">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="컴프레셔">
+  <title>로그인 · {{ site.name }}</title>
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" type="image/png" sizes="192x192" href="{{ url_for('static', filename='icons/icon-192.png') }}">
+  <link rel="apple-touch-icon" href="{{ url_for('static', filename='icons/apple-touch-icon.png') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  <script>if('serviceWorker' in navigator)navigator.serviceWorker.register('/sw.js').catch(function(){});</script>
+</head>
+<body class="login-body">
+  <form class="login-card" method="post" autocomplete="off">
+    <h1>{{ site.name }}</h1>
+    <p class="sub">원격 모니터링/제어</p>
+    {% if error %}<div class="err">{{ error }}</div>{% endif %}
+    <label>아이디
+      <input name="username" value="{{ username or '' }}" required autofocus
+             autocapitalize="none" autocorrect="off" autocomplete="username" spellcheck="false">
+    </label>
+    <label>비밀번호
+      <input name="password" type="password" required
+             autocapitalize="none" autocorrect="off" spellcheck="false">
+    </label>
+    <label>인증코드 (2FA, 설정된 경우만)
+      <input name="code" inputmode="numeric" pattern="[0-9]*" placeholder="6자리">
+    </label>
+    <button type="submit">로그인</button>
+    <p class="hint">최초 계정: admin / admin1234 · operator / operator1234 · viewer / viewer1234<br>
+      로그인 후 즉시 비밀번호를 변경하세요.</p>
+  </form>
+</body>
+</html>

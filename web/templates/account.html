@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}내 계정 · {{ site.name }}{% endblock %}
+{% block body %}
+<h1>내 계정</h1>
+<section class="panel narrow">
+  <p>사용자: <b>{{ user.username }}</b> · 역할: <b>{{ user.role }}</b></p>
+  {% if first %}<div class="err">최초 로그인입니다. 비밀번호를 변경하세요.</div>{% endif %}
+  {% if error %}<div class="err">{{ error }}</div>{% endif %}
+  {% if ok %}<div class="ok-msg">{{ ok }}</div>{% endif %}
+  <form method="post">
+    <label>새 비밀번호 (8자 이상)
+      <input name="new_password" type="password" required minlength="8">
+    </label>
+    <button class="btn ok" type="submit">변경</button>
+  </form>
+</section>
+{% endblock %}

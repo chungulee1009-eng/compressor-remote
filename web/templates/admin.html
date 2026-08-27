@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}관리자 · {{ site.name }}{% endblock %}
+{% block body %}
+<h1>관리자</h1>
+
+<section class="panel">
+  <h2>제어명령 승인 대기</h2>
+  <div id="pending" class="alarm-list">–</div>
+</section>
+
+<section class="panel">
+  <h2>사용자</h2>
+  <table class="tbl">
+    <thead><tr><th>아이디</th><th>역할</th><th>2FA</th><th>비밀번호변경</th><th></th></tr></thead>
+    <tbody>
+    {% for u in users %}
+      <tr>
+        <td>{{ u.username }}</td>
+        <td>
+          <select onchange="setRole('{{ u.username }}', this.value)">
+            {% for r in ['viewer','operator','admin'] %}
+            <option value="{{ r }}" {{ 'selected' if u.role==r }}>{{ r }}</option>
+            {% endfor %}
+          </select>
+        </td>
+        <td>{{ '설정됨' if u.has_2fa else '–' }}</td>
+        <td>{{ '필요' if u.must_change_pw else '완료' }}</td>
+        <td><button class="btn danger sm" onclick="delUser('{{ u.username }}')">삭제</button></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <h3>사용자 추가</h3>
+  <div class="btnrow">
+    <input id="nu_name" placeholder="아이디">
+    <input id="nu_pw" type="password" placeholder="비밀번호(8자+)">
+    <select id="nu_role">
+      <option value="viewer">viewer</option>
+      <option value="operator">operator</option>
+      <option value="admin">admin</option>
+    </select>
+    <button class="btn ok" onclick="addUser()">추가</button>
+  </div>
+  <div id="admin_msg" class="msg"></div>
+</section>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/common.js') }}"></script>
+<script src="{{ url_for('static', filename='js/admin.js') }}"></script>
+{% endblock %}

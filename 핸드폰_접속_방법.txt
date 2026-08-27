@@ -1,0 +1,74 @@
+========================================================
+컴프레셔 원격 모니터링/제어 - 핸드폰 접속 방법
+========================================================
+
+이 폴더가 "정본" 입니다.
+(이전의 OneDrive\Desktop\...\컴프레셔 원격제어 는 동일 코드의 백업)
+
+
+[1] 서버 실행
+--------------------------------------------------------
+  실행.bat  더블클릭   (최초 1회 가상환경 자동 생성)
+  -> http://127.0.0.1:8070  로 로컬 확인
+
+  계정:  admin / admin1234   (전체 권한)
+         operator / operator1234
+         viewer / viewer1234
+
+
+[2] 핸드폰에서 접속 (인터넷 어디서든)
+--------------------------------------------------------
+  회사 Wi-Fi 는 Tailscale/Cloudflare 를 막지만 ngrok 은 통과됨.
+
+  (a) PowerShell 에서 터널 실행:
+        ngrok http --url=jukebox-cassette-outer.ngrok-free.dev 8070
+      ("Session Status  online" 확인, 창은 계속 켜둘 것)
+
+  (b) 핸드폰 브라우저:
+        https://jukebox-cassette-outer.ngrok-free.dev/join
+      첫 접속 시 "Visit Site" 경고 한 번 클릭 -> 로그인 -> 홈 화면에 추가
+
+  * ngrok 계정: 이천구 계정 (chungu.lee100...@... 아님, 새로 만든 것)
+    authtoken 은 이 PC 의 ngrok 설정에 이미 등록됨.
+  * 고정 도메인: jukebox-cassette-outer.ngrok-free.dev (무료 1개)
+
+
+[3] PC 재부팅해도 자동 실행 (한 번만 설정)
+--------------------------------------------------------
+  서버:
+    server\상시실행_설치.bat  더블클릭 (관리자)
+
+  ngrok (관리자 PowerShell 에 붙여넣기):
+    $ngrok = "$env:LOCALAPPDATA\Microsoft\WindowsApps\ngrok.exe"
+    $act = New-ScheduledTaskAction -Execute $ngrok -Argument "http --url=jukebox-cassette-outer.ngrok-free.dev 8070"
+    $trg = New-ScheduledTaskTrigger -AtLogOn
+    $set = New-ScheduledTaskSettingsSet -StartWhenAvailable -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero)
+    Register-ScheduledTask -TaskName "CompressorNgrok" -Action $act -Trigger $trg -Settings $set -RunLevel Limited -Force
+    Start-ScheduledTask -TaskName "CompressorNgrok"
+
+  * 두 작업 모두 "로그온 시" 트리거 -> PC 를 로그인 상태로 두거나 Windows 자동 로그인 설정.
+  해제:
+    Unregister-ScheduledTask -TaskName CompressorNgrok -Confirm:$false
+    Unregister-ScheduledTask -TaskName CompressorRemoteServer -Confirm:$false
+
+
+[4] APK (선택, MDM/스토어 배포용)
+--------------------------------------------------------
+  .venv\Scripts\python.exe scripts\set_apk_host.py jukebox-cassette-outer.ngrok-free.dev
+  -> www.pwabuilder.com 에 https://jukebox-cassette-outer.ngrok-free.dev 입력 -> Android 패키지
+  자세한 내용: build-apk\README.md
+  (안드로이드는 [2] 의 "홈 화면에 추가"만으로도 실제 앱처럼 설치됨 - APK 불필요)
+
+
+[5] 실제 PLC 연결
+--------------------------------------------------------
+  config.yaml 의 해당 유닛 줄:
+    - { id: "COMP-09", host: "192.168.10.19", port: 5007, sim: false, control: false }
+  자세한 내용: README.md 의 "실제 PLC 연결 시"
+
+
+[주의]
+--------------------------------------------------------
+- ngrok 무료는 첫 접속 시 경고 페이지가 한 번 뜸 (클릭 통과).
+- 운영 전: config.yaml 의 server.secret_key 변경, 기본 계정 3개 비밀번호 변경.
+- ngrok 무료 도메인/터널은 계정당 1개 -> 호출벨 시스템과는 별도 계정 사용.

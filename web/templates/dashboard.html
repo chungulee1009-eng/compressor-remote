@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}통합 현황판 · {{ site.name }}{% endblock %}
+{% block body %}
+<div class="page-head">
+  <h1>통합 현황판</h1>
+  <div class="kpis" id="kpis"></div>
+</div>
+<div class="grid" id="grid"></div>
+<p class="updated" id="updated">불러오는 중…</p>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/common.js') }}"></script>
+<script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+{% endblock %}

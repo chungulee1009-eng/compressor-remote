@@ -1,0 +1,26 @@
+# Render Blueprint - https://render.com
+# GitHub 저장소를 Render 에 연결하면 이 파일대로 자동 배포된다.
+services:
+  - type: web
+    name: compressor-remote
+    runtime: python
+    plan: free
+    region: singapore
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn -w 1 --threads 8 --timeout 120 -b 0.0.0.0:$PORT wsgi:app
+    healthCheckPath: /login
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.7"
+      - key: COMPRESSOR_SECRET_KEY
+        generateValue: true      # Render 가 랜덤 생성 (세션 유지)
+      # 무료 플랜은 디스크가 임시라 재배포/휴면 시 DB(계정·이력) 초기화됨.
+      # 영구 저장이 필요하면 유료 디스크 추가 후 아래 주석 해제:
+      # - key: COMPRESSOR_DB_PATH
+      #   value: /var/data/compressor.db
+# 유료 디스크 예시:
+# disks:
+#   - name: data
+#     mountPath: /var/data
+#     sizeGB: 1

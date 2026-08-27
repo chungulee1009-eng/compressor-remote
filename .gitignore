@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+data/*.db
+data/*.db-wal
+data/*.db-shm
+server/logs/
+server/STOP
+*.keystore
+*.apk
+*.aab
+build-apk/output/

@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}{{ uid }} · {{ site.name }}{% endblock %}
+{% block body %}
+<div class="page-head">
+  <h1>{{ uid }}</h1>
+  <span id="statuspill" class="pill">…</span>
+</div>
+
+<div class="cards">
+  <div class="stat"><span>토출압력</span><b id="v_pressure">–</b><i>MPa</i></div>
+  <div class="stat"><span>모터전류</span><b id="v_current">–</b><i>A</i></div>
+  <div class="stat"><span>토출온도</span><b id="v_temp">–</b><i>℃</i></div>
+  <div class="stat"><span>누적 가동시간</span><b id="v_hours">–</b><i>hr</i></div>
+</div>
+
+{% if can_control %}
+<section class="panel">
+  <h2>원격 제어</h2>
+  <p class="note">명령은 감사로그에 기록되며, operator 명령은 관리자 승인 후 실행될 수 있습니다.</p>
+  <div class="btnrow">
+    <button class="btn ok" onclick="sendCmd('start')">기동</button>
+    <button class="btn danger" onclick="sendCmd('stop')">정지</button>
+  </div>
+  {% if can_setpoint %}
+  <div class="btnrow">
+    <label>압력 설정값(MPa)
+      <input id="sp" type="number" step="0.01" min="0.2"
+             value="{{ '%.2f'|format(thresholds.target_pressure_mpa) }}">
+    </label>
+    <button class="btn" onclick="sendSetpoint()">설정값 변경</button>
+  </div>
+  {% endif %}
+  <div id="cmdmsg" class="msg"></div>
+</section>
+{% elif monitor_only %}
+<section class="panel">
+  <h2>원격 제어</h2>
+  <p class="note">이 설비는 <b>모니터링 전용</b>으로 설정되어 있습니다 (config 의 <code>control: false</code>).
+  실제 PLC 파일럿 연결 초기에는 읽기 전용으로 운용하고, 래더에 로컬/원격 선택 스위치와
+  안전 인터록을 확인한 뒤 제어를 활성화하세요.</p>
+</section>
+{% endif %}
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>트렌드</h2>
+    <div class="range-tabs">
+      <button data-r="1h">1h</button>
+      <button data-r="24h" class="active">24h</button>
+      <button data-r="7d">7d</button>
+    </div>
+  </div>
+  <div class="chart-wrap"><div class="chart-title">토출압력 (MPa)</div><div id="ch_pressure" class="chart"></div></div>
+  <div class="chart-wrap"><div class="chart-title">모터전류 (A)</div><div id="ch_current" class="chart"></div></div>
+  <div class="chart-wrap"><div class="chart-title">토출온도 (℃)</div><div id="ch_temp" class="chart"></div></div>
+</section>
+
+<section class="panel">
+  <h2>최근 알람</h2>
+  <div id="unit_alarms" class="alarm-list">–</div>
+</section>
+
+<script>window.UID = {{ uid|tojson }};</script>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/common.js') }}"></script>
+<script src="{{ url_for('static', filename='js/chart.js') }}"></script>
+<script src="{{ url_for('static', filename='js/unit.js') }}"></script>
+{% endblock %}

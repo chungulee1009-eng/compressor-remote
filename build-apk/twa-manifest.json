@@ -1,0 +1,26 @@
+{
+  "packageId": "com.sinheung.compressor",
+  "host": "REPLACE_WITH_YOUR_HOST.ts.net",
+  "name": "컴프레셔 원격 모니터링",
+  "launcherName": "컴프레셔",
+  "display": "standalone",
+  "orientation": "any",
+  "themeColor": "#0b1220",
+  "themeColorDark": "#0b1220",
+  "navigationColor": "#0b1220",
+  "navigationColorDark": "#0b1220",
+  "backgroundColor": "#0b1220",
+  "startUrl": "/?source=twa",
+  "iconUrl": "https://REPLACE_WITH_YOUR_HOST.ts.net/static/icons/icon-512.png",
+  "maskableIconUrl": "https://REPLACE_WITH_YOUR_HOST.ts.net/static/icons/icon-maskable-512.png",
+  "appVersionName": "1.0.0",
+  "appVersionCode": 1,
+  "shortcuts": [],
+  "signingKey": {
+    "path": "./android.keystore",
+    "alias": "compressor"
+  },
+  "fallbackType": "customtabs",
+  "enableNotifications": false,
+  "features": {}
+}

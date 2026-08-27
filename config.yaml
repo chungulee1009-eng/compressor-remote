@@ -1,0 +1,93 @@
+# ============================================================
+# 100HP 컴프레셔 9대 원격 모니터링/제어 - 설정 파일
+# 모든 모듈(시뮬레이터 / 수집 게이트웨이 / 웹앱)이 이 파일을 읽습니다.
+# ============================================================
+
+site:
+  name: "100HP 컴프레셔 9대 원격 모니터링"
+  timezone: "Asia/Seoul"
+
+# 설비 1대 정격 (현황판의 "운영 마력/출력" 합계 계산에 사용)
+equipment:
+  rated_power_hp: 100
+  rated_power_kw: 74.6
+
+server:
+  web_host: "0.0.0.0"
+  web_port: 8070
+  # 운영 시 반드시 변경. 비워두면 실행 시 임시 키 자동 생성(재시작 시 로그인 풀림).
+  secret_key: "CHANGE-ME-1a2b3c4d5e6f"
+
+database:
+  path: "data/compressor.db"
+
+polling:
+  interval_sec: 2          # 게이트웨이가 9대를 한 바퀴 도는 주기
+  history_retention_days: 30
+
+simulator:
+  enabled: true            # 실제 PLC 연결 시 false 로 바꾸고 units[].ip / port 를 실제 값으로
+  tick_sec: 1              # 시뮬레이터 물리 모델 갱신 주기
+  bind_host: "127.0.0.1"
+
+# 각 유닛 = 미쓰비시 PLC 1대.
+#  host : 게이트웨이가 접속할 대상. 시뮬레이터면 127.0.0.1, 실제 PLC면 PLC 의 실 IP
+#  port : 시뮬레이터 mini-SLMP 포트, 또는 실제 PLC 의 SLMP TCP 포트
+#  sim     : false 면 이 유닛은 가상서버를 안 만들고 실제 PLC 로 폴링 (기본 true)
+#  control : false 면 모니터링 전용 - 기동/정지/설정 명령 차단 (기본 true)
+#  ip      : 참고용 메모(코드 미사용)
+# --- 1대만 실제 PLC 로 파일럿 연결하는 예시 (COMP-09) ---
+#   - { id: "COMP-09", host: "192.168.10.19", port: 5007, sim: false, control: false }
+units:
+  - { id: "COMP-01", host: "127.0.0.1", ip: "192.168.10.11", port: 5011 }
+  - { id: "COMP-02", host: "127.0.0.1", ip: "192.168.10.12", port: 5012 }
+  - { id: "COMP-03", host: "127.0.0.1", ip: "192.168.10.13", port: 5013 }
+  - { id: "COMP-04", host: "127.0.0.1", ip: "192.168.10.14", port: 5014 }
+  - { id: "COMP-05", host: "127.0.0.1", ip: "192.168.10.15", port: 5015 }
+  - { id: "COMP-06", host: "127.0.0.1", ip: "192.168.10.16", port: 5016 }
+  - { id: "COMP-07", host: "127.0.0.1", ip: "192.168.10.17", port: 5017 }
+  - { id: "COMP-08", host: "127.0.0.1", ip: "192.168.10.18", port: 5018 }
+  - { id: "COMP-09", host: "127.0.0.1", ip: "192.168.10.19", port: 5019 }
+
+# mini-SLMP D 레지스터 맵 (유닛 공통). 값 스케일은 scaling 참조.
+devices:
+  run_status: 100            # 0/1
+  discharge_pressure: 101    # value/pressure_div = MPa
+  motor_current: 102         # value/current_div  = A
+  fault_alarm: 103           # 0/1
+  discharge_temp: 104        # value/temp_div     = degC
+  run_hours_low: 105         # 32bit 누적 가동시간 하위워드
+  run_hours_high: 106        # 상위워드
+  cmd_start: 200             # 1 write -> 기동
+  cmd_stop: 201             # 1 write -> 정지
+  pressure_setpoint: 202     # write: 목표압력 * pressure_div
+  read_head: 100             # 배치 리드 시작 D
+  read_count: 7             # D100~D106
+
+scaling:
+  pressure_div: 1000
+  current_div: 10
+  temp_div: 10
+
+thresholds:
+  high_discharge_temp_c: 95.0
+  high_motor_current_a: 135.0
+  target_pressure_mpa: 0.75
+  pressure_band_mpa: 0.05
+
+# 야간/휴일 무부하 압력강하 = 누설 의심 자동감지
+leak_detection:
+  night_start_hour: 22
+  night_end_hour: 6
+  include_weekends: true
+  min_idle_minutes: 30      # 이 시간 이상 정지 상태였을 것
+  window_minutes: 60        # 관찰 구간
+  drop_mpa: 0.15            # 구간 내 압력강하가 이 값 이상이면 알람
+
+control:
+  require_admin_approval_for_operator: true   # operator 명령은 admin 승인 후 실행
+
+notifications:
+  push_enabled: true
+  sms_enabled: true
+  sms_recipients: ["+8210-0000-0000"]

@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0b1220">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="컴프레셔">
+  <title>{% block title %}{{ site.name }}{% endblock %}</title>
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" type="image/png" sizes="192x192" href="{{ url_for('static', filename='icons/icon-192.png') }}">
+  <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='icon.svg') }}">
+  <link rel="apple-touch-icon" href="{{ url_for('static', filename='icons/apple-touch-icon.png') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+{% if user %}
+<header class="topbar">
+  <button class="menu-btn" aria-label="메뉴" onclick="document.body.classList.toggle('nav-open')">☰</button>
+  <a class="brand" href="/">{{ site.name }}</a>
+  <span class="spacer"></span>
+  <span class="who">{{ user.username }} · <b>{{ user.role }}</b></span>
+  <a class="logout" href="/logout">로그아웃</a>
+</header>
+<nav class="sidenav">
+  <a href="/">통합 현황판</a>
+  <div class="nav-section">설비</div>
+  {% for u in unit_ids %}<a href="/unit/{{ u }}">{{ u }}</a>{% endfor %}
+  <div class="nav-section">운영</div>
+  <a href="/alarms">알람</a>
+  <a href="/account">내 계정</a>
+  {% if user.role == 'admin' %}<a href="/admin">관리자</a>{% endif %}
+</nav>
+{% endif %}
+<main class="content">
+  {% block body %}{% endblock %}
+</main>
+<script>
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js').catch(function(){});
+}
+</script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

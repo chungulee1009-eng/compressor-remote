@@ -5,6 +5,7 @@ WAL 모드로 읽기/쓰기 동시성 확보.
 """
 from __future__ import annotations
 
+import os
 import sqlite3
 import time
 from contextlib import contextmanager
@@ -109,24 +110,40 @@ def init_db() -> None:
 
 
 def _seed_users() -> None:
-    """최초 1회: 기본 계정 3개 생성. 운영 전 반드시 비밀번호 변경."""
+    """기본 계정 3개(admin/operator/viewer)를 보장한다.
+
+    - 없는 계정은 기본 비밀번호로 생성.
+    - 이미 있는 계정은 건드리지 않음(사용자 변경 존중).
+    - COMPRESSOR_RESET_USERS=1 이면 3개 계정 비밀번호를 기본값으로 강제 초기화
+      (클라우드처럼 디스크가 임시라 매번 알려진 계정이 필요할 때 사용).
+    """
     defaults = [
         ("admin", "admin1234", "admin"),
         ("operator", "operator1234", "operator"),
         ("viewer", "viewer1234", "viewer"),
     ]
+    force_reset = os.environ.get("COMPRESSOR_RESET_USERS") == "1"
+    touched = []
     with conn() as c:
-        n = c.execute("SELECT COUNT(*) FROM users").fetchone()[0]
-        if n:
-            return
+        existing = {r[0] for r in c.execute("SELECT username FROM users")}
         for username, pw, role in defaults:
-            c.execute(
-                "INSERT INTO users (username, pw_hash, role, created_at, must_change_pw) "
-                "VALUES (?,?,?,?,1)",
-                (username, generate_password_hash(pw), role, time.time()),
-            )
-    print("[db] 기본 계정 생성: admin/admin1234, operator/operator1234, viewer/viewer1234 "
-          "(로그인 후 즉시 변경 요망)")
+            if username not in existing:
+                c.execute(
+                    "INSERT INTO users (username, pw_hash, role, created_at, must_change_pw) "
+                    "VALUES (?,?,?,?,?)",
+                    (username, generate_password_hash(pw), role, time.time(),
+                     0 if force_reset else 1),
+                )
+                touched.append(username + "(생성)")
+            elif force_reset:
+                c.execute(
+                    "UPDATE users SET pw_hash=?, role=?, must_change_pw=0 WHERE username=?",
+                    (generate_password_hash(pw), role, username),
+                )
+                touched.append(username + "(초기화)")
+    if touched:
+        print("[db] 기본 계정 " + ", ".join(touched)
+              + " : 비번 <계정>1234 (로그인 후 변경 요망)")
 
 
 def audit(actor: str, action: str, detail: str = "") -> None:

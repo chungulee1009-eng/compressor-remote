@@ -15,6 +15,9 @@ services:
         value: "3.12.7"
       - key: COMPRESSOR_SECRET_KEY
         generateValue: true      # Render 가 랜덤 생성 (세션 유지)
+      - key: COMPRESSOR_RESET_USERS
+        value: "1"               # 임시디스크라 매 부팅 시 기본계정(admin/admin1234 등) 보장
+                                 # 영구디스크로 계정 유지하려면 이 값을 지우세요
       # 무료 플랜은 디스크가 임시라 재배포/휴면 시 DB(계정·이력) 초기화됨.
       # 영구 저장이 필요하면 유료 디스크 추가 후 아래 주석 해제:
       # - key: COMPRESSOR_DB_PATH

@@ -10,7 +10,12 @@ import sqlite3
 import time
 from contextlib import contextmanager
 
-from werkzeug.security import generate_password_hash
+from werkzeug.security import generate_password_hash as _gph
+
+
+def generate_password_hash(pw: str) -> str:
+    """저사양 클라우드에서 scrypt 기본값이 로그인을 타임아웃시켜 pbkdf2 사용."""
+    return _gph(pw, method="pbkdf2:sha256:60000")
 
 from core.config import load
 

@@ -11,7 +11,12 @@ import functools
 import time
 
 from flask import redirect, request, session, url_for
-from werkzeug.security import check_password_hash, generate_password_hash
+from werkzeug.security import check_password_hash
+from werkzeug.security import generate_password_hash as _gph
+
+# 저사양 클라우드(0.1 CPU)에서 scrypt 기본값은 로그인 요청을 타임아웃시킴 → pbkdf2 사용
+def generate_password_hash(pw: str) -> str:  # noqa: D103
+    return _gph(pw, method="pbkdf2:sha256:60000")
 
 from core.db import audit, conn
 

@@ -97,13 +97,21 @@ CREATE TABLE IF NOT EXISTS notifications (
 
 @contextmanager
 def conn():
-    c = sqlite3.connect(load()["database"]["abspath"], timeout=10)
+    c = sqlite3.connect(load()["database"]["abspath"], timeout=30)
     c.row_factory = sqlite3.Row
+    c.execute("PRAGMA busy_timeout=30000")   # 저사양 환경 동시쓰기 락 대비
     c.execute("PRAGMA journal_mode=WAL")
+    c.execute("PRAGMA synchronous=NORMAL")
     c.execute("PRAGMA foreign_keys=ON")
     try:
         yield c
         c.commit()
+    except Exception:
+        try:
+            c.rollback()
+        except Exception:
+            pass
+        raise
     finally:
         c.close()
 

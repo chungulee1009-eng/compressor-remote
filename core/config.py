@@ -30,6 +30,11 @@ def load() -> dict:
     if env_port and env_port.isdigit():
         cfg.setdefault("server", {})["web_port"] = int(env_port)
 
+    # 폴링 주기 환경변수 override (저사양 클라우드에서 부하/락 완화용)
+    env_poll = os.environ.get("COMPRESSOR_POLL_INTERVAL")
+    if env_poll and env_poll.replace(".", "", 1).isdigit():
+        cfg.setdefault("polling", {})["interval_sec"] = float(env_poll)
+
     # 시크릿 키: 환경변수 우선(운영 권장) → config.yaml → 임시 생성
     env_sk = os.environ.get("COMPRESSOR_SECRET_KEY")
     sk = env_sk or (cfg.get("server", {}) or {}).get("secret_key") or ""

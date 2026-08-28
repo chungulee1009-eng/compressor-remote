@@ -7,7 +7,7 @@ services:
     plan: free
     region: singapore
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn -w 1 --threads 8 --timeout 120 -b 0.0.0.0:$PORT wsgi:app
+    startCommand: gunicorn -w 1 --threads 4 --timeout 120 -b 0.0.0.0:$PORT wsgi:app
     healthCheckPath: /login
     autoDeploy: true
     envVars:
@@ -18,10 +18,13 @@ services:
       - key: COMPRESSOR_RESET_USERS
         value: "1"               # 임시디스크라 매 부팅 시 기본계정(admin/admin1234 등) 보장
                                  # 영구디스크로 계정 유지하려면 이 값을 지우세요
-      # 무료 플랜은 디스크가 임시라 재배포/휴면 시 DB(계정·이력) 초기화됨.
-      # 영구 저장이 필요하면 유료 디스크 추가 후 아래 주석 해제:
+      - key: COMPRESSOR_DB_PATH
+        value: /tmp/compressor.db   # 소스 폴더 대신 빠른 임시 디스크에 DB
+      - key: COMPRESSOR_POLL_INTERVAL
+        value: "5"               # 저사양 인스턴스 부하/락 완화 (기본 2초 -> 5초)
+      # 영구 저장이 필요하면 유료 디스크 추가:
       # - key: COMPRESSOR_DB_PATH
-      #   value: /var/data/compressor.db
+      #   value: /var/data/compressor.db  (아래 disks 와 함께)
 # 유료 디스크 예시:
 # disks:
 #   - name: data

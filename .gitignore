@@ -10,3 +10,6 @@ server/STOP
 *.apk
 *.aab
 build-apk/output/
+# AI 회의록 (녹음·DB·설정(API 키)·출력물은 PC 로컬에만 보관)
+meeting_minutes/data/
+meeting_minutes/회의록_출력/

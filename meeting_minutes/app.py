@@ -57,6 +57,7 @@ class App(tk.Tk):
         self.live = None  # 실시간 자막 (LiveTranscriber)
         self._preview = None  # 미리보기 엔진 (앱 시작 시 미리 불러와 재사용)
         self._preview_lock = threading.Lock()
+        self._gserver = None  # Google 음성인식 중계 서버 (선택 시)
 
         style = ttk.Style(self)
         if "vista" in style.theme_names():
@@ -260,7 +261,8 @@ class App(tk.Tk):
             self.recorder = Recorder(self.settings.get("mic_device"))
             title = safe_filename(self.v_title.get().strip() or "회의")
             path = Path(self.settings["recordings_dir"]) / f"{datetime.now():%Y%m%d_%H%M%S}_{title}.wav"
-            live_q = queue.Queue() if self.settings.get("live_stt", True) else None
+            google = self.settings.get("live_engine", "local") == "google"
+            live_q = queue.Queue() if self.settings.get("live_stt", True) and not google else None
             self.recorder.live_q = live_q  # 녹음 시작 전에 연결해야 첫 마디부터 자막에 포함됨
             self.recorder.start(path)
         except Exception as e:
@@ -278,7 +280,20 @@ class App(tk.Tk):
         self.b_txt.configure(state="disabled")
         self.l_source.configure(text=f"녹음 중 → {path.name}")
         self.log(f"녹음 시작 ({self.recorder.samplerate} Hz)")
-        if live_q is not None:
+        if google and self.settings.get("live_stt", True):
+            from .webspeech import GoogleLive
+            rec = self.recorder
+            self.live = GoogleLive(
+                self._google_server(), elapsed=lambda: rec.elapsed() if rec.recording else 0.0,
+                on_final=lambda cid, ln: self.ui_q.put(("final", (cid, ln))),
+                on_partial=lambda t: self.ui_q.put(("partial", t)),
+                on_status=lambda st: self.ui_q.put(("live_status", st)), log=self.log)
+            try:
+                self.live.start()
+            except Exception as e:
+                self.live = None
+                self.log(f"Google 음성인식 시작 실패 → 녹음 종료 후 인식: {e}")
+        elif live_q is not None:
             from . import stt
             from .live import LiveTranscriber
             self.live = LiveTranscriber(
@@ -301,9 +316,26 @@ class App(tk.Tk):
             self._preview.reset()
             return self._preview
 
+    def _google_server(self):
+        if self._gserver is None:
+            from .webspeech import GoogleSpeechServer
+            self._gserver = GoogleSpeechServer()
+        return self._gserver
+
     def _prewarm(self):
         """녹음 버튼을 누르자마자 자막이 나오도록 엔진을 미리 불러둠 (백그라운드)."""
         if not self.settings.get("live_stt", True):
+            return
+        if self.settings.get("live_engine", "local") == "google":
+            # Google 음성인식 창을 미리 열어 두면 마이크 허용을 회의 전에 끝낼 수 있음
+            try:
+                srv = self._google_server()
+                srv.start()
+                if not srv.page_connected:
+                    name = srv.open_browser()
+                    self.ui_q.put(("live_status", f"Google 음성인식 {name} 창을 열었습니다 — 처음이면 마이크 '허용' 클릭"))
+            except Exception as e:
+                self.ui_q.put(("live_status", f"Google 음성인식 준비 실패: {e}"))
             return
 
         def work():
@@ -823,6 +855,9 @@ class App(tk.Tk):
         self.v_live = tk.BooleanVar(value=s.get("live_stt", True))
         self.v_live_model = tk.StringVar(value=s.get("live_model", "base"))
         self.v_preview = tk.BooleanVar(value=s.get("live_preview", True))
+        self.engine_map = {"PC 내부 (보안·오프라인)": "local", "Google 음성인식 (가장 빠름·온라인)": "google"}
+        self.v_engine = tk.StringVar(value=next(k for k, v in self.engine_map.items()
+                                                if v == s.get("live_engine", "local")))
         self.v_fullpass = tk.BooleanVar(value=s.get("final_full_pass", False))
 
         r = 0
@@ -851,6 +886,10 @@ class App(tk.Tk):
             "회의용 컨퍼런스 마이크(USB) 사용 시 인식률 크게 향상")
         row("실시간 자막", ttk.Checkbutton(f, variable=self.v_live, text="녹음 중 말한 내용을 바로 텍스트로 표시"),
             "느린 PC 에서 자막이 밀리면 해제 (녹음 종료 후 한 번에 인식)")
+        row("자막 엔진", ttk.Combobox(f, textvariable=self.v_engine, values=list(self.engine_map), state="readonly",
+                                     width=34),
+            "Google: 말하는 즉시 표시(Google 문서 음성입력과 같은 엔진), Chrome 창 사용,\n"
+            "음성이 Google 로 전송됨 → 대외비 회의는 'PC 내부' 사용 (변경 후 프로그램 재시작)")
         row("미리보기 자막", ttk.Checkbutton(f, variable=self.v_preview, text="말하는 도중 바로 글자 표시 (회색, 띄어쓰기 없음)"),
             "번역기처럼 즉시 표시 → 말이 끊기면 확정 문장으로 교체 (최초 1회 약 420MB 다운로드)")
         row("실시간 자막 모델", ttk.Combobox(f, textvariable=self.v_live_model, state="readonly", width=16,
@@ -882,7 +921,8 @@ class App(tk.Tk):
                  api_key=self.v_key.get().strip(), output_dir=self.v_out.get().strip() or s["output_dir"],
                  vocab=self.t_vocab.get("1.0", "end").strip(), mic_device=self.mic_map.get(self.v_mic.get()),
                  live_stt=self.v_live.get(), final_full_pass=self.v_fullpass.get(),
-                 live_model=self.v_live_model.get(), live_preview=self.v_preview.get())
+                 live_model=self.v_live_model.get(), live_preview=self.v_preview.get(),
+                 live_engine=self.engine_map[self.v_engine.get()])
         config.save(s)
         messagebox.showinfo("설정", "저장했습니다.")
 
@@ -958,6 +998,8 @@ class App(tk.Tk):
             if self.live:
                 self.live.finish()
             messagebox.showinfo("녹음 저장", f"녹음파일이 저장되었습니다.\n{path}\n\n다음 실행 시 '음성파일 불러오기'로 처리하세요.")
+        if self._gserver:
+            self._gserver.stop()
         self.destroy()
 
 

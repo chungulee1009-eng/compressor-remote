@@ -19,6 +19,7 @@ DEFAULTS = {
     "ai_effort": "medium",          # low / medium / high
     "mic_device": None,             # None = 윈도우 기본 마이크
     "live_stt": True,               # 녹음 중 실시간 자막
+    "live_engine": "local",         # local: PC 내부(미리보기+Whisper) / google: Chrome 음성인식(즉시, 온라인)
     "live_preview": True,           # 말하는 도중 미리보기 자막 (sherpa-onnx 스트리밍, 회색 → 확정 시 교체)
     "live_model": "base",           # 실시간 자막용 모델 — base: 빠름(기본) / small: 정확도↑·느림 / medium: 정확·가장 느림
     "settings_rev": 2,

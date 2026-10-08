@@ -359,3 +359,44 @@ def test_live_whisper_failure_keeps_preview_text(monkeypatch):
     audio = np.concatenate([_tone(3), _silence(1)])
     lt, ev = _run_live(monkeypatch, Broken(), audio)
     assert lt.text() == "[00:00:00] 미리보기1" and lt.error is None
+
+
+def test_google_live_relay(monkeypatch):
+    """Chrome 페이지 → 127.0.0.1 서버 → 자막 (페이지 동작을 HTTP 요청으로 흉내)."""
+    import json
+    import urllib.request
+    from meeting_minutes import webspeech
+    srv = webspeech.GoogleSpeechServer()
+    monkeypatch.setattr(srv, "open_browser", lambda: "test")
+    t = [10.0]
+    ev = []
+    live = webspeech.GoogleLive(srv, elapsed=lambda: t[0], on_final=lambda c, ln: ev.append(("final", ln)),
+                                on_partial=lambda s: ev.append(("partial", s)), on_status=lambda s: None)
+    live.start()
+    try:
+        def get(path):
+            return urllib.request.urlopen(srv.url.rstrip("/") + path, timeout=5).read()
+
+        def post(**body):
+            req = urllib.request.Request(srv.url + "event", data=json.dumps(body).encode(),
+                                         headers={"Content-Type": "application/json"})
+            urllib.request.urlopen(req, timeout=5)
+
+        assert "webkitSpeechRecognition" in get("/").decode()
+        state = json.loads(get("/state"))
+        assert state["active"] and srv.page_connected
+        s = state["session"]
+        post(type="partial", text="SMT 이전은", session=s)
+        post(type="partial", text="SMT 이전은 11월까지", session=s)
+        post(type="final", text="SMT 이전은 11월까지 검토", session=s)
+        post(type="final", text="이전 녹음의 늦은 결과", session=s - 1)  # 이전 세션 이벤트는 무시
+        t[0] = 20.0
+        post(type="partial", text="김과장 견적", session=s)  # 확정 전에 녹음 종료
+        t[0] = 0.0  # 녹음 종료 후 녹음 시각은 0 으로 초기화됨
+        live.finish()
+        live.join(timeout=5)
+        assert not json.loads(get("/state"))["active"]
+    finally:
+        srv.stop()
+    assert live.lines == ["[00:00:09] SMT 이전은 11월까지 검토", "[00:00:19] 김과장 견적"]
+    assert ("partial", "SMT 이전은") in ev and live.error is None

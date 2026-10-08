@@ -53,6 +53,7 @@ class App(tk.Tk):
         self.current_meeting_id: int | None = None
         self.busy = False
         self.ui_q: queue.Queue = queue.Queue()
+        self.log_hist: list[str] = []
 
         style = ttk.Style(self)
         if "vista" in style.theme_names():
@@ -207,7 +208,9 @@ class App(tk.Tk):
 
     def log(self, msg: str):
         """워커 스레드에서도 호출 가능."""
-        self.ui_q.put(("log", f"{datetime.now():%H:%M:%S}  {msg}"))
+        line = f"{datetime.now():%H:%M:%S}  {msg}"
+        self.log_hist.append(line)  # 오류 기록용 사본 (워커 스레드에서 Tk 위젯을 읽지 않기 위함)
+        self.ui_q.put(("log", line))
 
     def _append_log(self, msg: str):
         self.t_log.configure(state="normal")
@@ -334,7 +337,7 @@ class App(tk.Tk):
                 self.ui_q.put(("text_clear", None))
                 self.log(f"[1/3] 음성인식 시작 (모델: {self.settings['whisper_model']}) — 최초 1회는 모델 다운로드로 시간이 걸립니다.")
                 text, dur = stt.transcribe(args["audio_path"], self.settings["whisper_model"],
-                                           self.settings.get("vocab", ""), args["attendees"], progress)
+                                           self.settings.get("vocab", ""), args["attendees"], progress, log=self.log)
                 if not text.strip():
                     raise RuntimeError("인식된 음성이 없습니다. 마이크 입력/녹음파일을 확인하세요.")
                 args["transcript"], args["duration_sec"] = text, dur or args["duration_sec"]
@@ -349,7 +352,20 @@ class App(tk.Tk):
             self.ui_q.put(("done", mid))
         except Exception as e:
             self.log("오류: " + "".join(traceback.format_exception_only(type(e), e)).strip())
-            self.ui_q.put(("fail", str(e)))
+            self._write_error_log()
+            self.ui_q.put(("fail", f"{e}\n\n자세한 내용: {config.DATA_DIR / 'error_log.txt'}"))
+
+    def _write_error_log(self):
+        """원인 파악용 상세 기록 (이 파일을 보내주면 원격으로 진단 가능)."""
+        try:
+            config.DATA_DIR.mkdir(parents=True, exist_ok=True)
+            with open(config.DATA_DIR / "error_log.txt", "a", encoding="utf-8") as f:
+                f.write(f"\n===== {datetime.now():%Y-%m-%d %H:%M:%S}  v{__version__}  "
+                        f"모델={self.settings.get('whisper_model')} 마이크={self.settings.get('mic_device')}\n")
+                f.write(traceback.format_exc())
+                f.write("--- 진행 로그 ---\n" + "\n".join(self.log_hist[-60:]) + "\n")
+        except Exception:
+            pass
 
     # ================================================================ 탭2: 회의록
     def _build_minutes_tab(self):

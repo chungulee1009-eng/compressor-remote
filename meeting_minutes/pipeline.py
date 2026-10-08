@@ -23,7 +23,7 @@ def process(store: Store, settings: dict, *, title: str, meeting_date: date, att
         from . import stt
         log(f"[1/3] 음성인식 시작 (모델: {settings['whisper_model']}) — 최초 1회는 모델 다운로드로 시간이 걸립니다.")
         transcript, duration_sec = stt.transcribe(audio_path, settings["whisper_model"], settings.get("vocab", ""),
-                                                  attendees, progress)
+                                                  attendees, progress, log=log)
         log(f"[1/3] 음성인식 완료: {len(transcript.splitlines())}문장, {int(duration_sec // 60)}분")
     if not transcript.strip():
         raise RuntimeError("인식된 음성이 없습니다. 마이크 입력/녹음파일을 확인하세요.")

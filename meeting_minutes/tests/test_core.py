@@ -157,3 +157,63 @@ def test_load_wav_resamples_to_16k(tmp_path):
         w.writeframes((np.ones((48000, 2)) * 16384).astype(np.int16).tobytes())
     x = stt.load_wav(str(p))
     assert x.dtype == np.float32 and len(x) == 16000 and abs(float(x.mean()) - 0.5) < 1e-3
+
+
+class _Seg:
+    def __init__(self, start, end, text):
+        self.start, self.end, self.text = start, end, text
+
+
+class _FakeModel:
+    """VAD 를 켜면 아무것도 못 찾고, 끄면 문장을 돌려주는 모델 (작은 목소리 상황 재현)."""
+    def __init__(self, device="cpu", fail=False):
+        self._mm_device, self.fail, self.calls = device, fail, []
+
+    def transcribe(self, audio, **kw):
+        self.calls.append((kw.get("vad_filter", False), float(abs(audio).max())))
+        if self.fail:
+            raise RuntimeError("Library cublas64_12.dll is not found")
+        segs = [] if kw.get("vad_filter") else [_Seg(0.5, 2.0, " 김과장 견적 부탁합니다")]
+        return iter(segs), None
+
+
+def _wav(path, amp, seconds=3):
+    import wave
+    import numpy as np
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(16000)
+        t = np.arange(16000 * seconds)
+        w.writeframes((np.sin(t * 0.05) * amp).astype(np.int16).tobytes())
+
+
+def test_transcribe_quiet_audio_boost_and_vad_fallback(tmp_path, monkeypatch):
+    from meeting_minutes import stt
+    m = _FakeModel()
+    monkeypatch.setattr(stt, "_load_model", lambda size, force_cpu=False: m)
+    _wav(tmp_path / "q.wav", amp=800)  # 약 -32 dB: 작은 목소리
+    logs = []
+    text, dur = stt.transcribe(str(tmp_path / "q.wav"), progress=lambda p, l: None, log=logs.append)
+    assert text == "[00:00:00] 김과장 견적 부탁합니다" and dur == 3.0
+    assert [c[0] for c in m.calls] == [True, False]  # VAD → 재시도(무 VAD)
+    assert m.calls[0][1] > 0.7  # 음량 보정됨 (0.024 → 최대 30배)
+    assert any("배 키워서" in s for s in logs) and any("다시 인식" in s for s in logs)
+
+
+def test_transcribe_gpu_failure_falls_back_to_cpu(tmp_path, monkeypatch):
+    from meeting_minutes import stt
+    gpu, cpu = _FakeModel("cuda", fail=True), _FakeModel("cpu")
+    monkeypatch.setattr(stt, "_load_model", lambda size, force_cpu=False: cpu if force_cpu else gpu)
+    _wav(tmp_path / "a.wav", amp=20000)
+    logs = []
+    text, _ = stt.transcribe(str(tmp_path / "a.wav"), log=logs.append)
+    assert "김과장" in text and any("CPU 로 다시" in s for s in logs)
+
+
+def test_transcribe_silent_file_raises(tmp_path, monkeypatch):
+    from meeting_minutes import stt
+    monkeypatch.setattr(stt, "_load_model", lambda size, force_cpu=False: _FakeModel())
+    _wav(tmp_path / "s.wav", amp=0)
+    with pytest.raises(RuntimeError, match="소리가 거의 없습니다"):
+        stt.transcribe(str(tmp_path / "s.wav"))

@@ -7,15 +7,16 @@ from __future__ import annotations
 
 import queue
 import threading
+import time
 from typing import Callable
 
 import numpy as np
 
 from . import stt
 
-MIN_SEC = 4.0    # 이보다 짧으면 자르지 않음 (문맥 부족 → 인식률↓)
-MAX_SEC = 12.0   # 말이 계속 이어져도 이 길이에서 가장 조용한 지점으로 자름
-QUIET_FRAMES = 4  # 100ms × 4 = 0.4초 조용하면 문장 끝으로 판단
+MIN_SEC = 2.0    # 이보다 짧으면 자르지 않음 (너무 짧으면 문맥 부족 → 인식률↓)
+MAX_SEC = 8.0    # 말이 계속 이어져도 이 길이에서 가장 조용한 지점으로 자름
+QUIET_FRAMES = 3  # 100ms × 3 = 0.3초 조용하면 말 끊김으로 판단
 
 
 class LiveTranscriber(threading.Thread):
@@ -34,6 +35,7 @@ class LiveTranscriber(threading.Thread):
         self._buf = np.zeros(0, dtype=np.int16)
         self._offset = 0      # 이미 인식 처리한 샘플 수 (= 다음 조각의 시작 시각)
         self._received = 0    # 받은 총 샘플 수
+        self.last_proc_sec = 0.0  # 직전 조각 인식에 걸린 시간 (속도 진단용)
 
     # ------------------------------------------------------------ 외부 API
     def finish(self) -> None:
@@ -76,7 +78,9 @@ class LiveTranscriber(threading.Thread):
                     self._process(cut)
                 lag = self.lag_sec
                 if not done:
-                    self.on_status("실시간 자막: 듣는 중" if lag < MAX_SEC + 3 else f"실시간 자막: 처리 지연 {lag:.0f}초")
+                    speed = f" · 조각 인식 {self.last_proc_sec:.1f}초" if self.last_proc_sec else ""
+                    self.on_status(f"실시간 자막: 듣는 중{speed}" if lag < MAX_SEC + 3
+                                   else f"실시간 자막: 처리 지연 {lag:.0f}초{speed} (설정에서 자막 모델을 base 로)")
             self.on_status("실시간 자막: 완료")
         except Exception as e:  # 실시간 자막 실패 → 녹음 종료 후 전체 인식으로 대체
             self.error = e
@@ -135,7 +139,10 @@ class LiveTranscriber(threading.Thread):
         x, _ = stt.normalize(x)
         # 직전 문장을 힌트로 주면 조각 경계에서도 문맥이 이어짐
         prompt = self.base_prompt + (" " + self.lines[-1].split("] ", 1)[-1] if self.lines else "")
-        for s, _e, text in stt.transcribe_chunk(self.model_size, x, prompt[-400:], log=self.log):
+        t0 = time.perf_counter()
+        results = stt.transcribe_chunk(self.model_size, x, prompt[-400:], log=self.log)
+        self.last_proc_sec = time.perf_counter() - t0
+        for s, _e, text in results:
             line = f"[{stt.fmt_ts(start + s)}] {text}"
             self.lines.append(line)
             self.on_line(line)

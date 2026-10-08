@@ -246,21 +246,27 @@ def _silence(sec):
     return np.zeros(int(16000 * sec), dtype=np.int16)
 
 
+def _ts_sec(line):
+    h, m, sec = line[1:9].split(":")
+    return int(h) * 3600 + int(m) * 60 + int(sec)
+
+
 def test_live_cuts_at_pauses_with_file_timeline(monkeypatch):
     from meeting_minutes import live, stt
     m = _ChunkModel()
     monkeypatch.setattr(stt, "_cpu_only", False)
     monkeypatch.setattr(stt, "_load_model", lambda size, force_cpu=False: m)
     got = []
-    lt = live.LiveTranscriber(16000, "medium", "p", on_line=got.append)
+    lt = live.LiveTranscriber(16000, "small", "p", on_line=got.append)
     lt.start()
-    # 3초 말 + 0.6초 쉼 + 2초 말 + 0.6초 쉼 | 3초 말 + 1초 쉼
+    # 말 3초 | 쉼 0.6 | 말 2초 | 쉼 0.6 | 말 3초 | 쉼 1초  → 말이 끊길 때마다 3조각
     _feed(lt, np.concatenate([_tone(3), _silence(0.6), _tone(2), _silence(0.6), _tone(3), _silence(1)]))
     lt.finish()
     lt.join(timeout=10)
-    assert got == ["[00:00:00] 구간1", "[00:00:06] 구간2"]  # 두 번째 조각 시각 = 녹음파일 기준 6초
-    assert lt.text() == "\n".join(got) and lt.error is None
-    assert all(4 <= x <= 12 for x in m.lengths)
+    assert len(got) == 3 and lt.error is None
+    assert [_ts_sec(x) for x in got] == [0, 3, 6]  # 녹음파일 기준 시각 (조각 시작 3.3초, 5.9초 + 0.2)
+    assert lt.text() == "\n".join(got)
+    assert all(live.MIN_SEC <= x <= live.MAX_SEC for x in m.lengths)
 
 
 def test_live_long_speech_capped_and_silence_skipped(monkeypatch):
@@ -268,10 +274,11 @@ def test_live_long_speech_capped_and_silence_skipped(monkeypatch):
     m = _ChunkModel()
     monkeypatch.setattr(stt, "_cpu_only", False)
     monkeypatch.setattr(stt, "_load_model", lambda size, force_cpu=False: m)
-    lt = live.LiveTranscriber(16000, "medium", "p", on_line=lambda s: None)
+    lt = live.LiveTranscriber(16000, "small", "p", on_line=lambda s: None)
     lt.start()
     _feed(lt, np.concatenate([_tone(20), _silence(15)]))  # 쉬지 않고 20초 + 긴 무음
     lt.finish()
     lt.join(timeout=10)
     assert max(m.lengths) <= live.MAX_SEC + 0.01 and sum(m.lengths) >= 19.9
-    assert len(m.lengths) == 2  # 무음 조각은 인식하지 않음
+    assert len(m.lengths) == 3  # 8 + 8 + 4초, 무음 조각은 인식하지 않음
+    assert lt.last_proc_sec >= 0

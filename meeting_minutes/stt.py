@@ -1,6 +1,7 @@
 """음성 → 텍스트 (faster-whisper, PC 내부에서 처리 → 회의 음성이 외부로 나가지 않음)."""
 from __future__ import annotations
 
+import os
 import wave
 from pathlib import Path
 from typing import Callable
@@ -32,7 +33,8 @@ def _load_model(size: str, force_cpu: bool = False):
                 device, compute = "cuda", "float16"
         except Exception:
             pass
-    model = WhisperModel(size, device=device, compute_type=compute)
+    # CPU 코어를 모두 사용 (기본값은 4개만 사용 → 다코어 PC 에서 느림)
+    model = WhisperModel(size, device=device, compute_type=compute, cpu_threads=os.cpu_count() or 4)
     model._mm_device = device  # 로그 표시용
     _model_cache[key] = model
     return model
@@ -105,12 +107,15 @@ def get_model(size: str):
     return _load_model(size, force_cpu=_cpu_only)
 
 
-def transcribe_chunk(model_size: str, audio: np.ndarray, prompt: str, beam_size: int = 3,
+def transcribe_chunk(model_size: str, audio: np.ndarray, prompt: str, beam_size: int = 1,
                      log: Callable[[str], None] = lambda s: None) -> list[tuple[float, float, str]]:
-    """짧은 구간(실시간 자막용) → [(시작초, 끝초, 문장)]. GPU 실패 시 CPU 로 자동 전환."""
+    """짧은 구간(실시간 자막용) → [(시작초, 끝초, 문장)]. GPU 실패 시 CPU 로 자동 전환.
+
+    속도 우선: greedy 디코딩(beam 1), 단어 시각 계산 생략 → 조각 1개당 처리시간 최소화.
+    """
     global _cpu_only
     kw = dict(language="ko", beam_size=beam_size, initial_prompt=prompt, condition_on_previous_text=False,
-              vad_filter=True, vad_parameters={"min_silence_duration_ms": 500})
+              without_timestamps=True, vad_filter=True, vad_parameters={"min_silence_duration_ms": 300})
     model = get_model(model_size)
     try:
         segs = list(model.transcribe(audio, **kw)[0])

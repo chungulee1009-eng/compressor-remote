@@ -19,6 +19,7 @@ DEFAULTS = {
     "ai_effort": "medium",          # low / medium / high
     "mic_device": None,             # None = 윈도우 기본 마이크
     "live_stt": True,               # 녹음 중 실시간 자막
+    "live_model": "small",          # 실시간 자막용 모델 (빠른 모델) — base: 가장 빠름 / small: 권장 / medium: 정확·느림
     "final_full_pass": False,       # 녹음 종료 후 전체 다시 인식 (정확도↑, 녹음 길이의 0.3~0.5배 시간 추가)
     "api_key": "",                  # 비우면 환경변수 ANTHROPIC_API_KEY 사용
 }

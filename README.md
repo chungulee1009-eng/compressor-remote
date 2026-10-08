@@ -14,6 +14,9 @@
                                         [모바일 대응 웹 대시보드 (PWA)]
 ```
 
+> **같은 저장소의 별도 프로그램 — SAM4S AI 회의록**: 음성 녹음 → 음성인식 → AI 회의록 → Action Item 관리.
+> `AI회의록_실행.bat` 더블클릭. 설명은 [`meeting_minutes/사용설명서.md`](meeting_minutes/사용설명서.md).
+
 ## 빠른 실행 (Windows)
 
 `실행.bat` 더블클릭 → 최초 1회 가상환경 생성 + 패키지 설치 후 자동 실행.

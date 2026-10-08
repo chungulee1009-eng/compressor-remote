@@ -55,6 +55,8 @@ class App(tk.Tk):
         self.ui_q: queue.Queue = queue.Queue()
         self.log_hist: list[str] = []
         self.live = None  # 실시간 자막 (LiveTranscriber)
+        self._preview = None  # 미리보기 엔진 (앱 시작 시 미리 불러와 재사용)
+        self._preview_lock = threading.Lock()
 
         style = ttk.Style(self)
         if "vista" in style.theme_names():
@@ -78,6 +80,7 @@ class App(tk.Tk):
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.after(100, self._poll_ui)
         self.after(500, self._tick)
+        self.after(1500, self._prewarm)
         self.refresh_meetings()
         self.refresh_actions()
 
@@ -139,7 +142,8 @@ class App(tk.Tk):
 
         pw = ttk.PanedWindow(f, orient="vertical")
         pw.pack(fill="both", expand=True, pady=(6, 0))
-        tf = ttk.LabelFrame(pw, text="📝 인식 텍스트 (TXT) — 음성인식 중 실시간 표시, 직접 수정 가능", padding=6)
+        tf = ttk.LabelFrame(pw, text="📝 인식 텍스트 (TXT) — 회색: 말하는 중 미리보기 → 검정: 확정 문장, 직접 수정 가능",
+                            padding=6)
         pw.add(tf, weight=3)
         tb = ttk.Frame(tf)
         tb.pack(fill="x")
@@ -149,6 +153,10 @@ class App(tk.Tk):
         self.l_txt = ttk.Label(tb, text="", foreground="#666")
         self.l_txt.pack(side="left", padx=10)
         self.t_text = tk.Text(tf, height=10, font=(FONT, 11), wrap="word", undo=True)
+        self.t_text.tag_configure("partial", foreground="#9AA0A6")   # 말하는 중 (계속 바뀜)
+        self.t_text.tag_configure("pending", foreground="#7F7F7F")   # 끊긴 조각 미리보기 (확정 대기)
+        self._last_partial = ""
+        self._finalized: set[int] = set()
         sbt = ttk.Scrollbar(tf, command=self.t_text.yview)
         self.t_text.configure(yscrollcommand=sbt.set)
         self.t_text.pack(side="left", fill="both", expand=True, pady=(4, 0))
@@ -187,6 +195,33 @@ class App(tk.Tk):
         self.text_path = str(p)
         self.l_txt.configure(text=f"저장됨: {p.name}")
         return p
+
+    def _show_partial(self, text: str):
+        if text == self._last_partial:
+            return
+        self._last_partial = text
+        t = self.t_text
+        rng = t.tag_ranges("partial")
+        if rng:
+            t.delete(rng[0], rng[1])
+        if text:
+            t.insert("end-1c", "🎙 " + text, ("partial",))
+            t.see("end")
+
+    def _show_final(self, cid: int, line: str):
+        """미리보기 줄을 Whisper 확정 문장으로 교체 (태그를 명시해 회색이 번지지 않게)."""
+        self._finalized.add(cid)
+        t = self.t_text
+        rng = t.tag_ranges(f"c{cid}")
+        if rng:
+            pos = t.index(rng[0])
+            t.delete(rng[0], rng[1])
+        else:
+            prng = t.tag_ranges("partial")
+            pos = t.index(prng[0]) if prng else t.index("end-1c")
+        if line:
+            t.insert(pos, line + "\n", ("final",))
+        t.see("end")
 
     def save_text(self):
         text = self.t_text.get("1.0", "end").strip()
@@ -234,6 +269,8 @@ class App(tk.Tk):
             return
         self.audio_path, self.transcript_text = "", ""
         self._set_text("", False)
+        self._finalized.clear()
+        self._last_partial = ""
         self.b_rec.configure(state="disabled")
         self.b_pause.configure(state="normal", text="❚❚ 일시정지")
         self.b_stop.configure(state="normal")
@@ -247,9 +284,41 @@ class App(tk.Tk):
             self.live = LiveTranscriber(
                 self.recorder.samplerate, self.settings.get("live_model", "base"),
                 stt.build_prompt(self.settings.get("vocab", ""), self.v_attendees.get().strip()),
-                on_line=lambda ln: self.ui_q.put(("line", ln)),
-                on_status=lambda st: self.ui_q.put(("live_status", st)), log=self.log, q=live_q)
+                on_final=lambda cid, ln: self.ui_q.put(("final", (cid, ln))),
+                on_pending=lambda cid, ln: self.ui_q.put(("pending", (cid, ln))),
+                on_partial=lambda t: self.ui_q.put(("partial", t)),
+                on_status=lambda st: self.ui_q.put(("live_status", st)), log=self.log, q=live_q,
+                preview_factory=self._make_preview if self.settings.get("live_preview", True) else None)
             self.live.start()
+
+    def _make_preview(self, progress):
+        """말하는 도중 보이는 미리보기 자막 엔진 (최초 1회 모델 다운로드, 이후 재사용)."""
+        with self._preview_lock:  # 앱 시작 시 미리 불러오는 중이면 끝날 때까지 기다렸다 재사용
+            if self._preview is None:
+                from . import streaming
+                streaming.download(progress)
+                self._preview = streaming.Preview()
+            self._preview.reset()
+            return self._preview
+
+    def _prewarm(self):
+        """녹음 버튼을 누르자마자 자막이 나오도록 엔진을 미리 불러둠 (백그라운드)."""
+        if not self.settings.get("live_stt", True):
+            return
+
+        def work():
+            note = lambda m: self.ui_q.put(("live_status", m))  # noqa: E731
+            try:
+                if self.settings.get("live_preview", True):
+                    self._make_preview(note)
+                from . import stt
+                note("자막 엔진 준비 중...")
+                stt.get_model(self.settings.get("live_model", "base"))
+                note("자막 준비 완료 — 녹음을 시작하면 바로 표시됩니다")
+            except Exception as e:  # 미리 불러오기 실패는 녹음 시 다시 시도
+                note(f"자막 엔진 미리 불러오기 실패: {e}")
+
+        threading.Thread(target=work, daemon=True).start()
 
     def toggle_pause(self):
         if not self.recorder:
@@ -753,6 +822,7 @@ class App(tk.Tk):
         self.v_mic = tk.StringVar()
         self.v_live = tk.BooleanVar(value=s.get("live_stt", True))
         self.v_live_model = tk.StringVar(value=s.get("live_model", "base"))
+        self.v_preview = tk.BooleanVar(value=s.get("live_preview", True))
         self.v_fullpass = tk.BooleanVar(value=s.get("final_full_pass", False))
 
         r = 0
@@ -781,6 +851,8 @@ class App(tk.Tk):
             "회의용 컨퍼런스 마이크(USB) 사용 시 인식률 크게 향상")
         row("실시간 자막", ttk.Checkbutton(f, variable=self.v_live, text="녹음 중 말한 내용을 바로 텍스트로 표시"),
             "느린 PC 에서 자막이 밀리면 해제 (녹음 종료 후 한 번에 인식)")
+        row("미리보기 자막", ttk.Checkbutton(f, variable=self.v_preview, text="말하는 도중 바로 글자 표시 (회색, 띄어쓰기 없음)"),
+            "번역기처럼 즉시 표시 → 말이 끊기면 확정 문장으로 교체 (최초 1회 약 420MB 다운로드)")
         row("실시간 자막 모델", ttk.Combobox(f, textvariable=self.v_live_model, state="readonly", width=16,
                                           values=["base", "small", "medium"]),
             "base: 빠름(기본) / small: 정확도↑, 2~3배 느림 / medium: 가장 정확·느림 (처음 선택 시 1회 다운로드)")
@@ -810,7 +882,7 @@ class App(tk.Tk):
                  api_key=self.v_key.get().strip(), output_dir=self.v_out.get().strip() or s["output_dir"],
                  vocab=self.t_vocab.get("1.0", "end").strip(), mic_device=self.mic_map.get(self.v_mic.get()),
                  live_stt=self.v_live.get(), final_full_pass=self.v_fullpass.get(),
-                 live_model=self.v_live_model.get())
+                 live_model=self.v_live_model.get(), live_preview=self.v_preview.get())
         config.save(s)
         messagebox.showinfo("설정", "저장했습니다.")
 
@@ -830,6 +902,17 @@ class App(tk.Tk):
                 elif kind == "line":
                     self.t_text.insert("end", val + "\n")
                     self.t_text.see("end")
+                elif kind == "partial":
+                    self._show_partial(val)
+                elif kind == "pending":
+                    cid, line = val
+                    if cid in self._finalized:  # 확정 문장이 먼저 도착한 경우 회색 줄 생략
+                        continue
+                    self._show_partial("")
+                    self.t_text.insert("end-1c", line + "\n", ("pending", f"c{cid}"))
+                    self.t_text.see("end")
+                elif kind == "final":
+                    self._show_final(*val)
                 elif kind == "live_status":
                     self.l_txt.configure(text=val)
                 elif kind == "text_clear":

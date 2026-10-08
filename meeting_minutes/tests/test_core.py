@@ -1,6 +1,8 @@
 """핵심 로직 테스트: python -m pytest meeting_minutes/tests -q"""
 from datetime import date
 
+import time
+
 import numpy as np
 import pytest
 
@@ -257,14 +259,14 @@ def test_live_cuts_at_pauses_with_file_timeline(monkeypatch):
     monkeypatch.setattr(stt, "_cpu_only", False)
     monkeypatch.setattr(stt, "_load_model", lambda size, force_cpu=False: m)
     got = []
-    lt = live.LiveTranscriber(16000, "small", "p", on_line=got.append)
+    lt = live.LiveTranscriber(16000, "small", "p", on_final=lambda cid, ln: got.append(ln))
     lt.start()
     # 말 3초 | 쉼 0.6 | 말 2초 | 쉼 0.6 | 말 3초 | 쉼 1초  → 말이 끊길 때마다 3조각
     _feed(lt, np.concatenate([_tone(3), _silence(0.6), _tone(2), _silence(0.6), _tone(3), _silence(1)]))
     lt.finish()
     lt.join(timeout=10)
     assert len(got) == 3 and lt.error is None
-    assert [_ts_sec(x) for x in got] == [0, 3, 6]  # 녹음파일 기준 시각 (조각 시작 3.3초, 5.9초 + 0.2)
+    assert [_ts_sec(x) for x in got] == [0, 3, 6]  # 녹음파일 기준 조각 시작 시각 (0, 3.4, 6.0초 — 0.4초 쉼에서 자름)
     assert lt.text() == "\n".join(got)
     assert all(live.MIN_SEC <= x <= live.MAX_SEC for x in m.lengths)
 
@@ -274,7 +276,7 @@ def test_live_long_speech_capped_and_silence_skipped(monkeypatch):
     m = _ChunkModel()
     monkeypatch.setattr(stt, "_cpu_only", False)
     monkeypatch.setattr(stt, "_load_model", lambda size, force_cpu=False: m)
-    lt = live.LiveTranscriber(16000, "small", "p", on_line=lambda s: None)
+    lt = live.LiveTranscriber(16000, "small", "p")
     lt.start()
     _feed(lt, np.concatenate([_tone(20), _silence(15)]))  # 쉬지 않고 20초 + 긴 무음
     lt.finish()
@@ -293,3 +295,67 @@ def test_settings_migrate_live_model_to_base(tmp_path, monkeypatch):
     assert config.load()["live_model"] == "base"  # v1.4 에서 저장된 기본값 → base
     (tmp_path / "settings.json").write_text(json.dumps({"live_model": "small", "settings_rev": 2}), encoding="utf-8")
     assert config.load()["live_model"] == "small"  # 이후 직접 고른 값은 유지
+
+
+class _FakePreview:
+    """0.1초마다 글자가 하나씩 늘어나는 연속 미리보기 (스트리밍 엔진 흉내)."""
+    def __init__(self):
+        self.n, self.k = 0, 0
+
+    def accept(self, x):
+        if len(x) and np.abs(x).max() > 0.01:
+            self.n += 1
+        return self.partial()
+
+    def partial(self):
+        return "말" * self.n
+
+    def cut(self, final=False):
+        self.k += 1
+        text, self.n = (f"미리보기{self.k}" if self.n else ""), 0
+        return text, final
+
+
+def _run_live(monkeypatch, model, audio):
+    from meeting_minutes import live, stt
+    monkeypatch.setattr(stt, "_cpu_only", False)
+    monkeypatch.setattr(stt, "_load_model", lambda size, force_cpu=False: model)
+    ev = []
+    lt = live.LiveTranscriber(16000, "base", "p", preview_factory=lambda note: _FakePreview(),
+                              on_partial=lambda t: ev.append(("partial", t)),
+                              on_pending=lambda c, ln: ev.append(("pending", c, ln)),
+                              on_final=lambda c, ln: ev.append(("final", c, ln)))
+    lt.start()
+    time.sleep(0.2)  # 미리보기 준비 (실제로는 백그라운드 다운로드·로드)
+    _feed(lt, audio)
+    lt.finish()
+    lt.join(timeout=10)
+    return lt, ev
+
+
+def test_live_preview_then_whisper_replaces(monkeypatch):
+    class Slow(_ChunkModel):  # 실제 Whisper 처럼 미리보기보다 늦게 확정
+        def transcribe(self, audio, **kw):
+            time.sleep(0.3)
+            return super().transcribe(audio, **kw)
+    audio = np.concatenate([_tone(3), _silence(0.6), _tone(3), _silence(1)])
+    lt, ev = _run_live(monkeypatch, Slow(), audio)
+    partials = [e[1] for e in ev if e[0] == "partial" and e[1]]
+    assert partials and max(len(p) for p in partials) >= 20  # 말하는 동안 글자가 계속 늘어남
+    pend = [e for e in ev if e[0] == "pending"]
+    fin = [e for e in ev if e[0] == "final"]
+    assert [e[2][11:] for e in pend] == ["미리보기1", "미리보기2"]
+    assert [e[2][11:] for e in fin] == ["구간1", "구간2"]          # Whisper 확정 문장으로 교체
+    assert [e[1] for e in pend] == [e[1] for e in fin]           # 같은 조각 id
+    assert all(ev.index(p) < ev.index(f) for p, f in zip(pend, fin))  # 미리보기가 먼저
+    assert lt.text().splitlines() == [e[2] for e in fin]
+
+
+def test_live_whisper_failure_keeps_preview_text(monkeypatch):
+    class Broken:
+        _mm_device = "cpu"
+        def transcribe(self, audio, **kw):
+            raise ValueError("boom")
+    audio = np.concatenate([_tone(3), _silence(1)])
+    lt, ev = _run_live(monkeypatch, Broken(), audio)
+    assert lt.text() == "[00:00:00] 미리보기1" and lt.error is None

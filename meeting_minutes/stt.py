@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import threading
 import wave
 from pathlib import Path
 from typing import Callable
@@ -17,9 +18,15 @@ HALLUCINATIONS = ("시청해주셔서 감사합니다", "시청해 주셔서 감
                   "다음 영상에서", "영상 끝까지")
 
 _model_cache: dict = {}
+_model_lock = threading.Lock()  # 미리 불러오기(백그라운드)와 녹음 시작이 겹쳐도 한 번만 로드
 
 
 def _load_model(size: str, force_cpu: bool = False):
+    with _model_lock:
+        return _load_model_locked(size, force_cpu)
+
+
+def _load_model_locked(size: str, force_cpu: bool):
     key = (size, force_cpu)
     if key in _model_cache:
         return _model_cache[key]

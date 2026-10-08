@@ -3,6 +3,7 @@ sounddevice>=0.4.6      # PC 마이크 녹음
 numpy>=1.26
 faster-whisper>=1.1.0   # 음성인식 (PC 내부 처리, 인터넷 불필요 — 최초 모델 다운로드 1회만)
 av>=15,<19             # 음성 디코더 — av 19 는 faster-whisper 1.2.1 과 호환 안 됨(metadata_errors 오류)
+sherpa-onnx>=1.10       # 말하는 도중 미리보기 자막 (스트리밍 한국어 모델, PC 내부 처리)
 anthropic>=1.0          # Claude AI 회의록 작성 (선택: 없으면 규칙 기반)
 openpyxl>=3.1           # Excel
 python-docx>=1.1        # Word

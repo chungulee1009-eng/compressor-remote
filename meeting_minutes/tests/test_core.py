@@ -1,6 +1,7 @@
 """핵심 로직 테스트: python -m pytest meeting_minutes/tests -q"""
 from datetime import date
 
+import numpy as np
 import pytest
 
 from meeting_minutes import exporters, pipeline, rules, summarizer
@@ -217,3 +218,60 @@ def test_transcribe_silent_file_raises(tmp_path, monkeypatch):
     _wav(tmp_path / "s.wav", amp=0)
     with pytest.raises(RuntimeError, match="소리가 거의 없습니다"):
         stt.transcribe(str(tmp_path / "s.wav"))
+
+
+class _ChunkModel:
+    """조각마다 '구간N' 한 문장을 돌려주는 가짜 모델 (조각 길이 기록)."""
+    _mm_device = "cpu"
+
+    def __init__(self):
+        self.lengths = []
+
+    def transcribe(self, audio, **kw):
+        self.lengths.append(len(audio) / 16000)
+        return iter([_Seg(0.2, 1.0, f"구간{len(self.lengths)}")]), None
+
+
+def _feed(lt, audio):
+    for i in range(0, len(audio), 1600):  # 0.1초 블록 (녹음 콜백과 동일)
+        lt.q.put(audio[i:i + 1600].astype(np.int16).tobytes())
+
+
+def _tone(sec, amp=8000):
+    t = np.arange(int(16000 * sec))
+    return (np.sin(t * 0.07) * amp).astype(np.int16)
+
+
+def _silence(sec):
+    return np.zeros(int(16000 * sec), dtype=np.int16)
+
+
+def test_live_cuts_at_pauses_with_file_timeline(monkeypatch):
+    from meeting_minutes import live, stt
+    m = _ChunkModel()
+    monkeypatch.setattr(stt, "_cpu_only", False)
+    monkeypatch.setattr(stt, "_load_model", lambda size, force_cpu=False: m)
+    got = []
+    lt = live.LiveTranscriber(16000, "medium", "p", on_line=got.append)
+    lt.start()
+    # 3초 말 + 0.6초 쉼 + 2초 말 + 0.6초 쉼 | 3초 말 + 1초 쉼
+    _feed(lt, np.concatenate([_tone(3), _silence(0.6), _tone(2), _silence(0.6), _tone(3), _silence(1)]))
+    lt.finish()
+    lt.join(timeout=10)
+    assert got == ["[00:00:00] 구간1", "[00:00:06] 구간2"]  # 두 번째 조각 시각 = 녹음파일 기준 6초
+    assert lt.text() == "\n".join(got) and lt.error is None
+    assert all(4 <= x <= 12 for x in m.lengths)
+
+
+def test_live_long_speech_capped_and_silence_skipped(monkeypatch):
+    from meeting_minutes import live, stt
+    m = _ChunkModel()
+    monkeypatch.setattr(stt, "_cpu_only", False)
+    monkeypatch.setattr(stt, "_load_model", lambda size, force_cpu=False: m)
+    lt = live.LiveTranscriber(16000, "medium", "p", on_line=lambda s: None)
+    lt.start()
+    _feed(lt, np.concatenate([_tone(20), _silence(15)]))  # 쉬지 않고 20초 + 긴 무음
+    lt.finish()
+    lt.join(timeout=10)
+    assert max(m.lengths) <= live.MAX_SEC + 0.01 and sum(m.lengths) >= 19.9
+    assert len(m.lengths) == 2  # 무음 조각은 인식하지 않음

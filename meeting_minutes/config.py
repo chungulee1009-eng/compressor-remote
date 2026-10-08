@@ -18,6 +18,8 @@ DEFAULTS = {
     "use_ai": True,                 # False → 규칙 기반(완전 오프라인)
     "ai_effort": "medium",          # low / medium / high
     "mic_device": None,             # None = 윈도우 기본 마이크
+    "live_stt": True,               # 녹음 중 실시간 자막
+    "final_full_pass": False,       # 녹음 종료 후 전체 다시 인식 (정확도↑, 녹음 길이의 0.3~0.5배 시간 추가)
     "api_key": "",                  # 비우면 환경변수 ANTHROPIC_API_KEY 사용
 }
 

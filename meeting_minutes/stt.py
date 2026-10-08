@@ -11,6 +11,9 @@ import numpy as np
 DEFAULT_VOCAB = ("SAM4S, 신흥정밀, SMT, POS, KIOSK, 키오스크, PDA, EFT, 프린터, OEE, CAPA, 택타임, 리드타임, "
                  "불량률, 직행률, 재공재고, 납기, 견적, 원가, 한계이익, BOM, MES, ERP, 라인, 공정, 설비, 가동률")
 SR = 16000
+# 무음·잡음 구간에서 Whisper 가 지어내는 대표 문구 (유튜브 자막 학습 영향)
+HALLUCINATIONS = ("시청해주셔서 감사합니다", "시청해 주셔서 감사합니다", "구독과 좋아요", "MBC 뉴스", "자막 제공",
+                  "다음 영상에서", "영상 끝까지")
 
 _model_cache: dict = {}
 
@@ -80,6 +83,46 @@ def normalize(x: np.ndarray, target_peak: float = 0.9, max_gain: float = 30.0) -
     return (x * gain).astype(np.float32), gain
 
 
+def build_prompt(vocab: str = "", attendees: str = "") -> str:
+    prompt = "회의 녹취록입니다. " + (vocab or DEFAULT_VOCAB)
+    return prompt + (f". 참석자: {attendees}" if attendees else "")
+
+
+def is_noise(seg) -> bool:
+    """환각 문구 또는 '말소리 아님' 확률이 높은 구간."""
+    text = seg.text.strip()
+    if not text:
+        return True
+    if len(text) < 30 and any(h in text for h in HALLUCINATIONS):
+        return True
+    return getattr(seg, "no_speech_prob", 0.0) > 0.6 and getattr(seg, "avg_logprob", 0.0) < -1.0
+
+
+_cpu_only = False  # GPU 실패 후에는 계속 CPU 사용
+
+
+def get_model(size: str):
+    return _load_model(size, force_cpu=_cpu_only)
+
+
+def transcribe_chunk(model_size: str, audio: np.ndarray, prompt: str, beam_size: int = 3,
+                     log: Callable[[str], None] = lambda s: None) -> list[tuple[float, float, str]]:
+    """짧은 구간(실시간 자막용) → [(시작초, 끝초, 문장)]. GPU 실패 시 CPU 로 자동 전환."""
+    global _cpu_only
+    kw = dict(language="ko", beam_size=beam_size, initial_prompt=prompt, condition_on_previous_text=False,
+              vad_filter=True, vad_parameters={"min_silence_duration_ms": 500})
+    model = get_model(model_size)
+    try:
+        segs = list(model.transcribe(audio, **kw)[0])
+    except RuntimeError as e:
+        if model._mm_device != "cuda":
+            raise
+        log(f"   GPU 사용 실패({e}) → CPU 로 전환")
+        _cpu_only = True
+        segs = list(get_model(model_size).transcribe(audio, **kw)[0])
+    return [(s.start, s.end, s.text.strip()) for s in segs if not is_noise(s)]
+
+
 def fmt_ts(sec: float) -> str:
     s = int(sec)
     return f"{s // 3600:02d}:{s % 3600 // 60:02d}:{s % 60:02d}"
@@ -93,8 +136,7 @@ def _run(model, audio: np.ndarray, prompt: str, vad: bool, total: float, progres
     segments, _ = model.transcribe(audio, **kw)
     lines = []
     for seg in segments:
-        text = seg.text.strip()
-        line = f"[{fmt_ts(seg.start)}] {text}" if text else ""
+        line = "" if is_noise(seg) else f"[{fmt_ts(seg.start)}] {seg.text.strip()}"
         if line:
             lines.append(line)
         if progress:
@@ -116,12 +158,10 @@ def transcribe(audio_path: str, model_size: str = "medium", vocab: str = "", att
     if gain > 1.0:
         log(f"   녹음 음량이 작아 {gain:.1f}배 키워서 인식합니다 (마이크를 가까이 두면 인식률↑)")
 
-    prompt = "회의 녹취록입니다. " + (vocab or DEFAULT_VOCAB)
-    if attendees:
-        prompt += f". 참석자: {attendees}"
+    prompt = build_prompt(vocab, attendees)
 
     log("   음성인식 모델 준비 중...")
-    model = _load_model(model_size)
+    model = get_model(model_size)
     log(f"   모델 준비 완료 ({model._mm_device}) — 인식 중... (CPU 는 녹음 길이의 0.3~0.5배 시간 소요)")
     try:
         lines = _run(model, audio, prompt, True, total, progress)
@@ -130,7 +170,9 @@ def transcribe(audio_path: str, model_size: str = "medium", vocab: str = "", att
             raise
         # 그래픽카드는 있으나 CUDA 라이브러리(cublas/cudnn)가 없는 PC → CPU 로 재시도
         log(f"   GPU 사용 실패({e}) → CPU 로 다시 인식합니다")
-        model = _load_model(model_size, force_cpu=True)
+        global _cpu_only
+        _cpu_only = True
+        model = get_model(model_size)
         lines = _run(model, audio, prompt, True, total, progress)
     if not lines:
         # 무음 감지(VAD)가 작은 목소리를 통째로 잘라낸 경우 → 무음 감지 없이 재시도

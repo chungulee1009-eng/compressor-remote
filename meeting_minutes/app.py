@@ -54,6 +54,7 @@ class App(tk.Tk):
         self.busy = False
         self.ui_q: queue.Queue = queue.Queue()
         self.log_hist: list[str] = []
+        self.live = None  # 실시간 자막 (LiveTranscriber)
 
         style = ttk.Style(self)
         if "vista" in style.theme_names():
@@ -224,6 +225,8 @@ class App(tk.Tk):
             self.recorder = Recorder(self.settings.get("mic_device"))
             title = safe_filename(self.v_title.get().strip() or "회의")
             path = Path(self.settings["recordings_dir"]) / f"{datetime.now():%Y%m%d_%H%M%S}_{title}.wav"
+            live_q = queue.Queue() if self.settings.get("live_stt", True) else None
+            self.recorder.live_q = live_q  # 녹음 시작 전에 연결해야 첫 마디부터 자막에 포함됨
             self.recorder.start(path)
         except Exception as e:
             self.recorder = None
@@ -238,6 +241,15 @@ class App(tk.Tk):
         self.b_txt.configure(state="disabled")
         self.l_source.configure(text=f"녹음 중 → {path.name}")
         self.log(f"녹음 시작 ({self.recorder.samplerate} Hz)")
+        if live_q is not None:
+            from . import stt
+            from .live import LiveTranscriber
+            self.live = LiveTranscriber(
+                self.recorder.samplerate, self.settings["whisper_model"],
+                stt.build_prompt(self.settings.get("vocab", ""), self.v_attendees.get().strip()),
+                on_line=lambda ln: self.ui_q.put(("line", ln)),
+                on_status=lambda st: self.ui_q.put(("live_status", st)), log=self.log, q=live_q)
+            self.live.start()
 
     def toggle_pause(self):
         if not self.recorder:
@@ -265,8 +277,32 @@ class App(tk.Tk):
         self.pb_level["value"] = 0
         self.l_source.configure(text=f"음성: {path.name}  ({fmt_hms(dur)})")
         self.log(f"녹음 종료 — {fmt_hms(dur)}, 저장: {path}")
-        # 녹음 종료 → 항상 텍스트(TXT)부터 만들고, 옵션이 켜져 있으면 회의록까지 이어서 작성
-        self.generate(minutes=self.v_autogen.get())
+        live, self.live = self.live, None
+        minutes = self.v_autogen.get()
+        if live is None:
+            # 녹음 종료 → 항상 텍스트(TXT)부터 만들고, 옵션이 켜져 있으면 회의록까지 이어서 작성
+            self.generate(minutes=minutes)
+            return
+        live.finish()
+        args = self._job_args()
+        if args is None:
+            return
+        self._set_busy("남은 음성 자막 처리 중...")
+        threading.Thread(target=self._finish_live, args=(live, args, minutes), daemon=True).start()
+
+    def _finish_live(self, live, args: dict, minutes: bool):
+        """실시간 자막을 마무리하고 그 텍스트로 TXT/회의록 작성. 자막 실패·옵션 시 전체 다시 인식."""
+        live.join()
+        text = live.text()
+        if live.error or not text.strip() or self.settings.get("final_full_pass"):
+            if text.strip() and not live.error:
+                self.log("정확도 향상을 위해 녹음 전체를 다시 인식합니다 (설정: 종료 후 전체 다시 인식)")
+            args["transcript"] = ""
+        else:
+            self.log(f"[1/3] 실시간 자막 완료: {len(live.lines)}문장")
+            self.ui_q.put(("text_done", text))
+            args["transcript"] = text
+        self._worker(args, minutes)
 
     def load_audio(self):
         p = filedialog.askopenfilename(title="회의 음성파일 선택", filetypes=[
@@ -310,20 +346,29 @@ class App(tk.Tk):
         if not self.audio_path and not self.transcript_text:
             messagebox.showinfo("안내", "먼저 녹음하거나 음성파일/전사문을 불러오세요.")
             return
+        args = self._job_args()
+        if args is None:
+            return
+        self._set_busy("처리 중...")
+        threading.Thread(target=self._worker, args=(args, minutes), daemon=True).start()
+
+    def _job_args(self) -> dict | None:
         try:
             mdate = date.fromisoformat(self.v_date.get().strip())
         except ValueError:
             messagebox.showerror("입력 오류", "회의일은 YYYY-MM-DD 형식으로 입력하세요.")
-            return
+            return None
         title = self.v_title.get().strip() or f"회의 {mdate.isoformat()}"
+        return dict(title=title, meeting_date=mdate, attendees=self.v_attendees.get().strip(),
+                    location=self.v_location.get().strip(), audio_path=self.audio_path,
+                    transcript=self.transcript_text, duration_sec=self.audio_duration)
+
+    def _set_busy(self, msg: str):
         self.busy = True
         self.b_gen.configure(state="disabled")
         self.b_txt.configure(state="disabled")
         self.pb_job["value"] = 0
-        args = dict(title=title, meeting_date=mdate, attendees=self.v_attendees.get().strip(),
-                    location=self.v_location.get().strip(), audio_path=self.audio_path,
-                    transcript=self.transcript_text, duration_sec=self.audio_duration)
-        threading.Thread(target=self._worker, args=(args, minutes), daemon=True).start()
+        self.l_job.configure(text=msg)
 
     def _worker(self, args: dict, minutes: bool = True):
         def progress(p: float, line: str):
@@ -706,6 +751,8 @@ class App(tk.Tk):
         self.v_key = tk.StringVar(value=s.get("api_key", ""))
         self.v_out = tk.StringVar(value=s["output_dir"])
         self.v_mic = tk.StringVar()
+        self.v_live = tk.BooleanVar(value=s.get("live_stt", True))
+        self.v_fullpass = tk.BooleanVar(value=s.get("final_full_pass", False))
 
         r = 0
 
@@ -731,6 +778,10 @@ class App(tk.Tk):
         self.v_mic.set(cur)
         row("마이크", ttk.Combobox(f, textvariable=self.v_mic, values=list(self.mic_map), state="readonly", width=50),
             "회의용 컨퍼런스 마이크(USB) 사용 시 인식률 크게 향상")
+        row("실시간 자막", ttk.Checkbutton(f, variable=self.v_live, text="녹음 중 말한 내용을 바로 텍스트로 표시"),
+            "느린 PC 에서 자막이 밀리면 해제 (녹음 종료 후 한 번에 인식)")
+        row("종료 후 재인식", ttk.Checkbutton(f, variable=self.v_fullpass, text="녹음 종료 후 전체를 다시 인식 (정확도↑)"),
+            "실시간 자막보다 문맥이 이어져 정확, 녹음 길이의 0.3~0.5배 시간 추가")
         row("AI 회의록 사용", ttk.Checkbutton(f, variable=self.v_useai, text="Claude AI 로 회의록 작성 (해제 시 규칙 기반·완전 오프라인)"))
         row("AI 분석 수준", ttk.Combobox(f, textvariable=self.v_effort, values=["low", "medium", "high"],
                                        state="readonly", width=10), "high: 긴 회의·복잡한 안건에서 더 정확, 비용·시간 증가")
@@ -753,7 +804,8 @@ class App(tk.Tk):
         s = self.settings
         s.update(whisper_model=self.v_model.get(), use_ai=self.v_useai.get(), ai_effort=self.v_effort.get(),
                  api_key=self.v_key.get().strip(), output_dir=self.v_out.get().strip() or s["output_dir"],
-                 vocab=self.t_vocab.get("1.0", "end").strip(), mic_device=self.mic_map.get(self.v_mic.get()))
+                 vocab=self.t_vocab.get("1.0", "end").strip(), mic_device=self.mic_map.get(self.v_mic.get()),
+                 live_stt=self.v_live.get(), final_full_pass=self.v_fullpass.get())
         config.save(s)
         messagebox.showinfo("설정", "저장했습니다.")
 
@@ -773,6 +825,8 @@ class App(tk.Tk):
                 elif kind == "line":
                     self.t_text.insert("end", val + "\n")
                     self.t_text.see("end")
+                elif kind == "live_status":
+                    self.l_txt.configure(text=val)
                 elif kind == "text_clear":
                     self._set_text("", False)
                 elif kind == "text_done":
@@ -813,6 +867,8 @@ class App(tk.Tk):
             if not messagebox.askyesno("종료", "녹음 중입니다. 녹음을 저장하고 종료할까요?"):
                 return
             path, _ = self.recorder.stop()
+            if self.live:
+                self.live.finish()
             messagebox.showinfo("녹음 저장", f"녹음파일이 저장되었습니다.\n{path}\n\n다음 실행 시 '음성파일 불러오기'로 처리하세요.")
         self.destroy()
 

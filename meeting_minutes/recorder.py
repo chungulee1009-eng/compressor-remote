@@ -26,6 +26,7 @@ class Recorder:
         self._paused_at = 0.0
         self.level = 0.0  # 0~1 입력 레벨(레벨미터용)
         self.samplerate = TARGET_SR
+        self.live_q: queue.Queue | None = None  # 실시간 자막용 (LiveTranscriber.q)
 
     @staticmethod
     def list_input_devices() -> list[tuple[int, str]]:
@@ -50,7 +51,10 @@ class Recorder:
         mono = indata[:, 0] if indata.ndim > 1 else indata
         self.level = min(1.0, float(np.sqrt(np.mean(mono.astype(np.float32) ** 2))) / 8000.0)
         if not self._paused:
-            self._q.put(mono.astype(np.int16).tobytes())
+            data = mono.astype(np.int16).tobytes()
+            self._q.put(data)
+            if self.live_q is not None:
+                self.live_q.put(data)
 
     def _write_loop(self):
         while self._stream is not None or not self._q.empty():

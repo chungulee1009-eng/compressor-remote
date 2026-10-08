@@ -132,6 +132,8 @@ def test_pipeline_store_search_export(store, tmp_path):
     # 파일 출력
     paths = pipeline.export(store, mid, tmp_path / "out", ("xlsx", "docx", "pdf"))
     assert all(p.exists() and p.stat().st_size > 1000 for p in paths)
+    txt = pipeline.export(store, mid, tmp_path / "out", ("txt",))[0]
+    assert txt.name.endswith("_전사문.txt") and "김과장이 업체 3곳" in txt.read_text(encoding="utf-8-sig")
     assert paths[0].name == "2026-10-07_SMT_이전_검토_회의록.xlsx"
     tracker = exporters.export_action_tracker(store.list_actions(), tmp_path / "out", store.action_kpi())
     assert tracker.exists()
@@ -141,3 +143,17 @@ def test_pipeline_store_search_export(store, tmp_path):
     assert [a["assignee"] for a in store.get_meeting(mid)["actions"]] == ["최부장"]
     store.delete_meeting(mid)
     assert store.list_actions() == []
+
+
+def test_load_wav_resamples_to_16k(tmp_path):
+    import wave
+    import numpy as np
+    from meeting_minutes import stt
+    p = tmp_path / "a.wav"
+    with wave.open(str(p), "wb") as w:
+        w.setnchannels(2)
+        w.setsampwidth(2)
+        w.setframerate(48000)
+        w.writeframes((np.ones((48000, 2)) * 16384).astype(np.int16).tobytes())
+    x = stt.load_wav(str(p))
+    assert x.dtype == np.float32 and len(x) == 16000 and abs(float(x.mean()) - 0.5) < 1e-3

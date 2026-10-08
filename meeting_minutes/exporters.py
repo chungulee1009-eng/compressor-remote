@@ -47,6 +47,16 @@ def _action_rows(m: dict) -> list[list[str]]:
     return rows
 
 
+# ====================================================================== TXT
+def export_txt(m: dict, out_dir: str | Path) -> Path:
+    """음성인식 전사문 → 텍스트 파일 (메모장에서 바로 열림)."""
+    out = Path(out_dir) / f"{m['meeting_date']}_{safe_filename(m['title'])}_전사문.txt"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    head = f"회의명: {m['title']}\n회의일: {m['meeting_date']}\n참석자: {m.get('attendees') or '-'}\n\n"
+    out.write_text(head + (m.get("transcript") or "").strip() + "\n", encoding="utf-8-sig")
+    return out
+
+
 # ====================================================================== Excel
 def export_excel(m: dict, out_dir: str | Path) -> Path:
     from openpyxl import Workbook

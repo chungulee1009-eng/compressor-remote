@@ -123,22 +123,87 @@ class App(tk.Tk):
 
         gen = ttk.Frame(f)
         gen.pack(fill="x", pady=4)
+        self.b_txt = ttk.Button(gen, text="📝 텍스트만 변환", style="Big.TButton",
+                                command=lambda: self.generate(minutes=False))
+        self.b_txt.pack(side="left")
         self.b_gen = ttk.Button(gen, text="🤖  AI 회의록 생성", style="Big.TButton", command=self.generate)
-        self.b_gen.pack(side="left")
+        self.b_gen.pack(side="left", padx=(6, 0))
         self.v_autogen = tk.BooleanVar(value=True)
-        ttk.Checkbutton(gen, text="녹음 종료 시 자동 생성", variable=self.v_autogen).pack(side="left", padx=12)
+        ttk.Checkbutton(gen, text="녹음 종료 시 회의록까지 자동 생성", variable=self.v_autogen).pack(side="left", padx=12)
         self.pb_job = ttk.Progressbar(gen, length=320, maximum=100)
         self.pb_job.pack(side="left", padx=10)
         self.l_job = ttk.Label(gen, text="대기")
         self.l_job.pack(side="left")
 
-        lg = ttk.LabelFrame(f, text="진행 로그 / 실시간 인식 문장", padding=6)
-        lg.pack(fill="both", expand=True, pady=(6, 0))
-        self.t_log = tk.Text(lg, height=12, font=(FONT, 10), wrap="word", state="disabled")
+        pw = ttk.PanedWindow(f, orient="vertical")
+        pw.pack(fill="both", expand=True, pady=(6, 0))
+        tf = ttk.LabelFrame(pw, text="📝 인식 텍스트 (TXT) — 음성인식 중 실시간 표시, 직접 수정 가능", padding=6)
+        pw.add(tf, weight=3)
+        tb = ttk.Frame(tf)
+        tb.pack(fill="x")
+        ttk.Button(tb, text="💾 TXT 저장", command=self.save_text).pack(side="left")
+        ttk.Button(tb, text="📂 TXT 열기", command=self.open_text).pack(side="left", padx=4)
+        ttk.Button(tb, text="📋 복사", command=self.copy_text).pack(side="left")
+        self.l_txt = ttk.Label(tb, text="", foreground="#666")
+        self.l_txt.pack(side="left", padx=10)
+        self.t_text = tk.Text(tf, height=10, font=(FONT, 11), wrap="word", undo=True)
+        sbt = ttk.Scrollbar(tf, command=self.t_text.yview)
+        self.t_text.configure(yscrollcommand=sbt.set)
+        self.t_text.pack(side="left", fill="both", expand=True, pady=(4, 0))
+        sbt.pack(side="right", fill="y")
+        self.text_ready = False  # 인식 텍스트가 현재 입력(녹음/파일)의 결과인지
+        self.text_path = ""
+
+        lg = ttk.LabelFrame(pw, text="진행 로그", padding=6)
+        pw.add(lg, weight=1)
+        self.t_log = tk.Text(lg, height=5, font=(FONT, 9), wrap="word", state="disabled")
         sb = ttk.Scrollbar(lg, command=self.t_log.yview)
         self.t_log.configure(yscrollcommand=sb.set)
         self.t_log.pack(side="left", fill="both", expand=True)
         sb.pack(side="right", fill="y")
+
+    # ---------------------------------------------------------------- 인식 텍스트
+    def _set_text(self, text: str, ready: bool):
+        self.t_text.delete("1.0", "end")
+        if text:
+            self.t_text.insert("1.0", text)
+        self.text_ready = ready
+        self.text_path = ""
+        self.l_txt.configure(text="")
+
+    def _text_file_path(self) -> Path:
+        d = self.v_date.get().strip() or date.today().isoformat()
+        name = f"{d}_{safe_filename(self.v_title.get().strip() or '회의')}_전사문.txt"
+        return Path(self.settings["output_dir"]) / name
+
+    def _write_text(self, text: str) -> Path:
+        p = self._text_file_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        head = (f"회의명: {self.v_title.get().strip() or '-'}\n회의일: {self.v_date.get().strip()}\n"
+                f"참석자: {self.v_attendees.get().strip() or '-'}\n\n")
+        p.write_text(head + text.strip() + "\n", encoding="utf-8-sig")  # BOM: 메모장·엑셀 한글 깨짐 방지
+        self.text_path = str(p)
+        self.l_txt.configure(text=f"저장됨: {p.name}")
+        return p
+
+    def save_text(self):
+        text = self.t_text.get("1.0", "end").strip()
+        if not text:
+            messagebox.showinfo("안내", "저장할 텍스트가 없습니다.")
+            return
+        p = self._write_text(text)
+        self.log(f"TXT 저장: {p}")
+
+    def open_text(self):
+        if not self.text_path and self.t_text.get("1.0", "end").strip():
+            self._write_text(self.t_text.get("1.0", "end"))
+        if self.text_path:
+            open_path(self.text_path)
+
+    def copy_text(self):
+        self.clipboard_clear()
+        self.clipboard_append(self.t_text.get("1.0", "end").strip())
+        self.l_txt.configure(text="클립보드에 복사됨")
 
     def log(self, msg: str):
         """워커 스레드에서도 호출 가능."""
@@ -162,10 +227,12 @@ class App(tk.Tk):
             messagebox.showerror("녹음 오류", f"마이크를 열 수 없습니다.\n\n{e}\n\n설정 탭에서 마이크를 확인하세요.")
             return
         self.audio_path, self.transcript_text = "", ""
+        self._set_text("", False)
         self.b_rec.configure(state="disabled")
         self.b_pause.configure(state="normal", text="❚❚ 일시정지")
         self.b_stop.configure(state="normal")
         self.b_gen.configure(state="disabled")
+        self.b_txt.configure(state="disabled")
         self.l_source.configure(text=f"녹음 중 → {path.name}")
         self.log(f"녹음 시작 ({self.recorder.samplerate} Hz)")
 
@@ -191,17 +258,19 @@ class App(tk.Tk):
         self.b_pause.configure(state="disabled", text="❚❚ 일시정지")
         self.b_stop.configure(state="disabled")
         self.b_gen.configure(state="normal")
+        self.b_txt.configure(state="normal")
         self.pb_level["value"] = 0
         self.l_source.configure(text=f"음성: {path.name}  ({fmt_hms(dur)})")
         self.log(f"녹음 종료 — {fmt_hms(dur)}, 저장: {path}")
-        if self.v_autogen.get():
-            self.generate()
+        # 녹음 종료 → 항상 텍스트(TXT)부터 만들고, 옵션이 켜져 있으면 회의록까지 이어서 작성
+        self.generate(minutes=self.v_autogen.get())
 
     def load_audio(self):
         p = filedialog.askopenfilename(title="회의 음성파일 선택", filetypes=[
             ("음성파일", "*.wav *.mp3 *.m4a *.aac *.ogg *.flac *.wma *.mp4 *.webm"), ("모든 파일", "*.*")])
         if p:
             self.audio_path, self.transcript_text, self.audio_duration = p, "", 0.0
+            self._set_text("", False)
             self.l_source.configure(text=f"음성: {Path(p).name}")
             if not self.v_title.get():
                 self.v_title.set(Path(p).stem)
@@ -219,14 +288,22 @@ class App(tk.Tk):
             except UnicodeDecodeError:
                 continue
         self.audio_path = ""
+        self._set_text(self.transcript_text, True)
         self.l_source.configure(text=f"전사문: {Path(p).name} ({len(self.transcript_text):,}자)")
         if not self.v_title.get():
             self.v_title.set(Path(p).stem)
         self.log(f"전사문 불러옴: {p}")
 
-    def generate(self):
+    def generate(self, minutes: bool = True):
+        """minutes=False → 음성인식(TXT)까지만. 이미 인식된 텍스트가 있으면(수정본 포함) 음성인식 생략."""
         if self.busy:
             return
+        pane = self.t_text.get("1.0", "end").strip()
+        if self.text_ready and pane:
+            if not minutes:
+                self.save_text()
+                return
+            self.transcript_text = pane
         if not self.audio_path and not self.transcript_text:
             messagebox.showinfo("안내", "먼저 녹음하거나 음성파일/전사문을 불러오세요.")
             return
@@ -238,19 +315,34 @@ class App(tk.Tk):
         title = self.v_title.get().strip() or f"회의 {mdate.isoformat()}"
         self.busy = True
         self.b_gen.configure(state="disabled")
+        self.b_txt.configure(state="disabled")
         self.pb_job["value"] = 0
         args = dict(title=title, meeting_date=mdate, attendees=self.v_attendees.get().strip(),
                     location=self.v_location.get().strip(), audio_path=self.audio_path,
                     transcript=self.transcript_text, duration_sec=self.audio_duration)
-        threading.Thread(target=self._worker, args=(args,), daemon=True).start()
+        threading.Thread(target=self._worker, args=(args, minutes), daemon=True).start()
 
-    def _worker(self, args: dict):
-        def progress(p: float, text: str):
+    def _worker(self, args: dict, minutes: bool = True):
+        def progress(p: float, line: str):
             self.ui_q.put(("progress", p))
-            if text:
-                self.ui_q.put(("log", f"   🗣 {text}"))
+            if line:
+                self.ui_q.put(("line", line))
 
         try:
+            if not args["transcript"]:
+                from . import stt
+                self.ui_q.put(("text_clear", None))
+                self.log(f"[1/3] 음성인식 시작 (모델: {self.settings['whisper_model']}) — 최초 1회는 모델 다운로드로 시간이 걸립니다.")
+                text, dur = stt.transcribe(args["audio_path"], self.settings["whisper_model"],
+                                           self.settings.get("vocab", ""), args["attendees"], progress)
+                if not text.strip():
+                    raise RuntimeError("인식된 음성이 없습니다. 마이크 입력/녹음파일을 확인하세요.")
+                args["transcript"], args["duration_sec"] = text, dur or args["duration_sec"]
+                self.log(f"[1/3] 음성인식 완료: {len(text.splitlines())}문장")
+                self.ui_q.put(("text_done", text))
+            if not minutes:
+                self.ui_q.put(("idle", "텍스트 변환 완료"))
+                return
             mid = pipeline.process(self.store, self.settings, log=self.log, progress=progress, **args)
             paths = pipeline.export(self.store, mid, self.settings["output_dir"], ("xlsx",))
             self.log(f"Excel 회의록 저장: {paths[0]}")
@@ -284,7 +376,8 @@ class App(tk.Tk):
         pw.add(right, weight=3)
         bar = ttk.Frame(right)
         bar.pack(fill="x")
-        for txt, fmt in (("📊 Excel 저장", "xlsx"), ("📝 Word 저장", "docx"), ("📕 PDF 저장", "pdf")):
+        for txt, fmt in (("📊 Excel 저장", "xlsx"), ("📝 Word 저장", "docx"), ("📕 PDF 저장", "pdf"),
+                         ("🗒 TXT 저장", "txt")):
             ttk.Button(bar, text=txt, command=lambda x=fmt: self.export_current(x)).pack(side="left", padx=2)
         ttk.Button(bar, text="📁 출력 폴더", command=lambda: open_path(self._ensure_dir(self.settings["output_dir"]))
                    ).pack(side="left", padx=8)
@@ -661,12 +754,28 @@ class App(tk.Tk):
                 kind, val = self.ui_q.get_nowait()
                 if kind == "log":
                     self._append_log(val)
+                elif kind == "line":
+                    self.t_text.insert("end", val + "\n")
+                    self.t_text.see("end")
+                elif kind == "text_clear":
+                    self._set_text("", False)
+                elif kind == "text_done":
+                    self._set_text(val, True)
+                    p = self._write_text(val)
+                    self.log(f"TXT 저장: {p}")
+                elif kind == "idle":
+                    self.busy = False
+                    self.b_gen.configure(state="normal")
+                    self.b_txt.configure(state="normal")
+                    self.pb_job["value"] = 100
+                    self.l_job.configure(text=val)
                 elif kind == "progress":
                     self.pb_job["value"] = val * 100
                     self.l_job.configure(text=f"음성인식 {val * 100:.0f}%")
                 elif kind == "done":
                     self.busy = False
                     self.b_gen.configure(state="normal")
+                    self.b_txt.configure(state="normal")
                     self.pb_job["value"] = 100
                     self.l_job.configure(text="완료")
                     self.refresh_meetings()
@@ -676,6 +785,7 @@ class App(tk.Tk):
                 elif kind == "fail":
                     self.busy = False
                     self.b_gen.configure(state="normal")
+                    self.b_txt.configure(state="normal")
                     self.l_job.configure(text="실패")
                     messagebox.showerror("회의록 생성 실패", val)
         except queue.Empty:

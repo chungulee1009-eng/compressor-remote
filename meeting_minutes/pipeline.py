@@ -8,7 +8,8 @@ from typing import Callable
 from . import exporters, summarizer
 from .storage import Store
 
-FORMATS = {"xlsx": exporters.export_excel, "docx": exporters.export_word, "pdf": exporters.export_pdf}
+FORMATS = {"xlsx": exporters.export_excel, "docx": exporters.export_word, "pdf": exporters.export_pdf,
+           "txt": exporters.export_txt}
 
 
 def process(store: Store, settings: dict, *, title: str, meeting_date: date, attendees: str = "", location: str = "",

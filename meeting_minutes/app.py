@@ -245,7 +245,7 @@ class App(tk.Tk):
             from . import stt
             from .live import LiveTranscriber
             self.live = LiveTranscriber(
-                self.recorder.samplerate, self.settings.get("live_model", "small"),
+                self.recorder.samplerate, self.settings.get("live_model", "base"),
                 stt.build_prompt(self.settings.get("vocab", ""), self.v_attendees.get().strip()),
                 on_line=lambda ln: self.ui_q.put(("line", ln)),
                 on_status=lambda st: self.ui_q.put(("live_status", st)), log=self.log, q=live_q)
@@ -752,7 +752,7 @@ class App(tk.Tk):
         self.v_out = tk.StringVar(value=s["output_dir"])
         self.v_mic = tk.StringVar()
         self.v_live = tk.BooleanVar(value=s.get("live_stt", True))
-        self.v_live_model = tk.StringVar(value=s.get("live_model", "small"))
+        self.v_live_model = tk.StringVar(value=s.get("live_model", "base"))
         self.v_fullpass = tk.BooleanVar(value=s.get("final_full_pass", False))
 
         r = 0
@@ -783,7 +783,7 @@ class App(tk.Tk):
             "느린 PC 에서 자막이 밀리면 해제 (녹음 종료 후 한 번에 인식)")
         row("실시간 자막 모델", ttk.Combobox(f, textvariable=self.v_live_model, state="readonly", width=16,
                                           values=["base", "small", "medium"]),
-            "base: 가장 빠름 / small: 권장 / medium: 정확하지만 늦게 나옴 (처음 선택 시 1회 다운로드)")
+            "base: 빠름(기본) / small: 정확도↑, 2~3배 느림 / medium: 가장 정확·느림 (처음 선택 시 1회 다운로드)")
         row("종료 후 재인식", ttk.Checkbutton(f, variable=self.v_fullpass, text="녹음 종료 후 전체를 다시 인식 (정확도↑)"),
             "실시간 자막보다 문맥이 이어져 정확, 녹음 길이의 0.3~0.5배 시간 추가")
         row("AI 회의록 사용", ttk.Checkbutton(f, variable=self.v_useai, text="Claude AI 로 회의록 작성 (해제 시 규칙 기반·완전 오프라인)"))

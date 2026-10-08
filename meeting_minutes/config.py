@@ -19,7 +19,8 @@ DEFAULTS = {
     "ai_effort": "medium",          # low / medium / high
     "mic_device": None,             # None = 윈도우 기본 마이크
     "live_stt": True,               # 녹음 중 실시간 자막
-    "live_model": "small",          # 실시간 자막용 모델 (빠른 모델) — base: 가장 빠름 / small: 권장 / medium: 정확·느림
+    "live_model": "base",           # 실시간 자막용 모델 — base: 빠름(기본) / small: 정확도↑·느림 / medium: 정확·가장 느림
+    "settings_rev": 2,
     "final_full_pass": False,       # 녹음 종료 후 전체 다시 인식 (정확도↑, 녹음 길이의 0.3~0.5배 시간 추가)
     "api_key": "",                  # 비우면 환경변수 ANTHROPIC_API_KEY 사용
 }
@@ -27,11 +28,18 @@ DEFAULTS = {
 
 def load() -> dict:
     s = dict(DEFAULTS)
+    saved: dict = {}
     if SETTINGS_PATH.exists():
         try:
-            s.update(json.loads(SETTINGS_PATH.read_text(encoding="utf-8")))
+            saved = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
+            s.update(saved)
         except (OSError, ValueError):
             pass
+    if saved and saved.get("settings_rev", 1) < 2:
+        # v1.4 에서 저장된 기본값(small) → 실시간 자막 속도 우선으로 base 전환 (직접 고른 값은 이후 유지)
+        if s.get("live_model") == "small":
+            s["live_model"] = "base"
+        s["settings_rev"] = 2
     apply_api_key(s)
     return s
 

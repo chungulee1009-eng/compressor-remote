@@ -282,3 +282,14 @@ def test_live_long_speech_capped_and_silence_skipped(monkeypatch):
     assert max(m.lengths) <= live.MAX_SEC + 0.01 and sum(m.lengths) >= 19.9
     assert len(m.lengths) == 3  # 8 + 8 + 4초, 무음 조각은 인식하지 않음
     assert lt.last_proc_sec >= 0
+
+
+def test_settings_migrate_live_model_to_base(tmp_path, monkeypatch):
+    import json
+    from meeting_minutes import config
+    monkeypatch.setattr(config, "SETTINGS_PATH", tmp_path / "settings.json")
+    assert config.load()["live_model"] == "base"  # 새 설치
+    (tmp_path / "settings.json").write_text(json.dumps({"live_model": "small"}), encoding="utf-8")
+    assert config.load()["live_model"] == "base"  # v1.4 에서 저장된 기본값 → base
+    (tmp_path / "settings.json").write_text(json.dumps({"live_model": "small", "settings_rev": 2}), encoding="utf-8")
+    assert config.load()["live_model"] == "small"  # 이후 직접 고른 값은 유지

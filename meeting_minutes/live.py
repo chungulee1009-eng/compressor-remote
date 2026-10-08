@@ -80,7 +80,7 @@ class LiveTranscriber(threading.Thread):
                 if not done:
                     speed = f" · 조각 인식 {self.last_proc_sec:.1f}초" if self.last_proc_sec else ""
                     self.on_status(f"실시간 자막: 듣는 중{speed}" if lag < MAX_SEC + 3
-                                   else f"실시간 자막: 처리 지연 {lag:.0f}초{speed} (설정에서 자막 모델을 base 로)")
+                                   else f"실시간 자막: 처리 지연 {lag:.0f}초{speed} (설정에서 실시간 자막 해제 또는 '종료 후 재인식' 사용)")
             self.on_status("실시간 자막: 완료")
         except Exception as e:  # 실시간 자막 실패 → 녹음 종료 후 전체 인식으로 대체
             self.error = e
@@ -106,7 +106,8 @@ class LiveTranscriber(threading.Thread):
         if dur < MIN_SEC:
             return n if final else 0
         rms = self._frame_rms(self._buf)
-        noise, speech = np.percentile(rms, 20), np.percentile(rms, 90)
+        # 하위 5% = 쉼 소리 크기 (쉼이 짧아 버퍼의 일부여도 잡히도록 낮은 백분위 사용)
+        noise, speech = np.percentile(rms, 5), np.percentile(rms, 90)
         if speech > noise * 2 + 50:      # 말소리/쉼 대비가 있을 때만 쉼을 판단
             quiet = rms <= noise + 0.25 * (speech - noise)
         else:                            # 대비 없음: 전체가 무음이면 아무 데서나, 계속 말하면 쉼 없음

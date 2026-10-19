@@ -591,6 +591,44 @@ def backup():
         os.remove(os.path.join(BACKUP_DIR, f))
 
 
+def refresh_links(wb, extra=None):
+    """원본파일 링크를 PC 절대경로로 재설정.
+    상대경로 링크는 OneDrive 폴더에서 웹주소(onedrive.live.com)로 해석되어 열리지 않으므로,
+    실행 시마다 보관 폴더를 스캔해 현재 위치 기준 절대경로로 맞춘다 (폴더 이동 시에도 자동 복구)."""
+    files = dict(extra or {})
+    for root, _, fs in os.walk(ARCHIVE):
+        for f in fs:
+            files.setdefault(f, os.path.join(root, f))
+    changed = 0
+    for sheet, col in (("승인원대장", COL["원본파일"]), ("품번별최신", 12)):
+        if sheet not in wb.sheetnames:
+            continue
+        ws = wb[sheet]
+        for r in range(2, ws.max_row + 1):
+            c = ws.cell(row=r, column=col)
+            path = files.get(str(c.value or ""))
+            if not path:
+                continue
+            target = os.path.abspath(path)
+            if not c.hyperlink or c.hyperlink.target != target:
+                c.hyperlink = target
+                c.font = F_LINK
+                changed += 1
+    return changed
+
+
+def save_workbook(wb):
+    wb.calculation.fullCalcOnLoad = True  # 엑셀 열 때 집계 수식 재계산
+    backup()
+    try:
+        wb.save(XLSX)
+        return True
+    except PermissionError:
+        print("\n[오류] 승인원_관리대장.xlsx 가 엑셀에서 열려 있어 저장할 수 없습니다.")
+        print("       엑셀 파일을 닫고 다시 실행하세요. (PDF 는 이동/복사되지 않았습니다)")
+        return False
+
+
 def main(argv):
     os.makedirs(INBOX, exist_ok=True)
     if argv:
@@ -602,6 +640,13 @@ def main(argv):
     sources = [p for p in sources if p.lower().endswith(".pdf") and os.path.isfile(p)]
     if not sources:
         print(f"[안내] 처리할 PDF 가 없습니다. '{os.path.relpath(INBOX, BASE)}' 폴더에 넣거나 PDF 를 드래그하세요.")
+        if os.path.exists(XLSX):
+            wb = load_workbook(XLSX)
+            n = refresh_links(wb)
+            if n:
+                if not save_workbook(wb):
+                    return 2
+                print(f"[링크] 원본파일 링크 {n}건을 현재 PC 경로로 갱신했습니다.")
         return 0
 
     wb = open_workbook()
@@ -659,13 +704,8 @@ def main(argv):
     if plan:
         rebuild_latest(wb)
         rebuild_summary(wb)
-        wb.calculation.fullCalcOnLoad = True  # 엑셀 열 때 집계 수식 재계산
-        backup()
-        try:
-            wb.save(XLSX)
-        except PermissionError:
-            print("\n[오류] 승인원_관리대장.xlsx 가 엑셀에서 열려 있어 저장할 수 없습니다.")
-            print("       엑셀 파일을 닫고 다시 실행하세요. (PDF 는 이동/복사되지 않았습니다)")
+        refresh_links(wb, {os.path.basename(rel): os.path.join(BASE, rel) for _, rel, _ in plan})
+        if not save_workbook(wb):
             return 2
         for src, rel, _ in plan:
             dst = os.path.join(BASE, rel)

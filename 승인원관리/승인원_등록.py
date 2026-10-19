@@ -215,50 +215,93 @@ def parse_approval_page(page, rec, warn):
             warn.append("발행No 텍스트추출")
 
 
-def parse_history_page(page, rec):
-    hist = []
-    for t in page.extract_tables():
-        for row in t:
-            cells = [clean(c) for c in row]
-            if cells and re.fullmatch(r"\d+", cells[0] or "") and len(cells) >= 8 \
-                    and parse_date(cells[1] or ""):
-                hist.append({"이력No": int(cells[0]), "승인일자": parse_date(cells[1]),
-                             "변경 전 버전": cells[2], "변경 후 버전": cells[3],
-                             "변경 전 내용": cells[4], "변경 후 내용": cells[5],
-                             "구형재고": cells[6], "변경시점": cells[7]})
+def parse_history(pages, rec):
+    """승인이력 표는 제목과 다른 페이지에 있을 수 있어 앞쪽 페이지 전체에서 행 패턴으로 탐색"""
+    hist, seen = [], set()
+    for page in pages:
+        for t in page.extract_tables():
+            for row in t:
+                cells = [clean((c or "").replace("\n", " ")) for c in row]
+                if len(cells) >= 8 and re.fullmatch(r"\d+", cells[0]) and parse_date(cells[1]):
+                    key = (cells[0], cells[1])
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    hist.append({"이력No": int(cells[0]), "승인일자": parse_date(cells[1]),
+                                 "변경 전 버전": cells[2], "변경 후 버전": cells[3],
+                                 "변경 전 내용": cells[4], "변경 후 내용": cells[5],
+                                 "구형재고": cells[6], "변경시점": cells[7]})
+        text = page.extract_text() or ""
+        m = re.search(r"변경\s*상세\s*내역\s*\n(.+)", text, re.S)
+        if m and "변경내역" not in rec:
+            rec["변경내역"] = "\n".join(clean(x).lstrip("- ").strip() for x in m[1].split("\n") if clean(x))
     rec["_hist"] = hist
-    text = page.extract_text() or ""
-    m = re.search(r"변경\s*상세\s*내역\s*\n(.+)", text, re.S)
-    if m:
-        rec["변경내역"] = "\n".join(clean(x).lstrip("- ").strip() for x in m[1].split("\n") if clean(x))
+
+
+def special_notes(page):
+    """특기사항: 좌측 '*' 항목 + 우측 별도 메모를 분리 (줄 좌표 기준)"""
+    lines = page.extract_text_lines()
+    start = next((l for l in lines if nz(l["text"]).startswith("특기사항")), None)
+    if not start:
+        return None
+    end = next((l for l in lines if l["top"] > start["top"] and nz(l["text"]).startswith("배포선")), None)
+    left, right = [], []
+    for l in lines:
+        if l["top"] <= start["top"] + 1 or (end and l["top"] >= end["top"] - 1):
+            continue
+        t = clean(l["text"])
+        if l["x0"] > page.width * 0.5:
+            right.append(t)
+        elif t.startswith("*") or not left:
+            left.append(t)
+        else:
+            left[-1] += " " + t  # 줄바꿈된 항목 이어붙임
+    if right:
+        left.append("※ " + " ".join(right))
+    return "\n".join(left)
 
 
 def parse_vendor_page(page, rec):
-    text = page.extract_text() or ""
-    part = text.split("업체정보", 1)[-1]
-    m = re.search(r"이\s*름\s+(\S+(?:\s+\S{1,4})?)", part)
-    if m:
-        rec["업체담당자"] = clean(m[1])
-    m = re.search(r"(?:핸\s*드\s*폰\s*번\s*호|전\s*화\s*번\s*호)\s+([\d\-]{9,})", part)
-    if m:
-        rec["업체연락처"] = m[1]
-    m = re.search(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+", part)
-    if m:
-        rec["업체이메일"] = m[0]
+    """시험성적서 업체정보 표: 공급자 담당자 우선, 없으면 제조자"""
+    info, sect = {"제조자": {}, "공급자": {}}, None
+    fields = {"이름": "업체담당자", "전화번호": "전화", "핸드폰번호": "HP",
+              "이메일": "업체이메일", "이메일주소": "업체이메일"}
+    for t in page.extract_tables():
+        for row in t:
+            keys = [nz(c) for c in row]
+            if keys and keys[0] in info:
+                sect = keys[0]
+            if not sect:
+                continue
+            for ci, k in enumerate(keys):
+                if k in fields:
+                    v = clean(_next_value(row, ci))
+                    if v and v != "-":
+                        info[sect].setdefault(fields[k], v)
+    for sect in ("공급자", "제조자"):
+        d = info[sect]
+        rec.setdefault("업체담당자", d.get("업체담당자"))
+        tel = " / ".join(x for x in (d.get("전화"), d.get("HP") and "HP " + d["HP"]) if x)
+        if tel and not rec.get("업체연락처"):
+            rec["업체연락처"] = tel
+        if d.get("업체이메일") and not rec.get("업체이메일"):
+            rec["업체이메일"] = d["업체이메일"]
+    if not rec.get("업체담당자"):
+        rec.pop("업체담당자", None)
 
 
 def parse_pdf(path):
     rec, warn = {}, []
     with pdfplumber.open(path) as pdf:
         rec["페이지수"] = len(pdf.pages)
-        texts = [(p.extract_text() or "") for p in pdf.pages[:6]]
+        front = pdf.pages[:6]
+        texts = [(p.extract_text() or "") for p in front]
         idx = next((i for i, t in enumerate(texts) if "承認書" in t or "승인서" in nz(t)), 0)
         parse_approval_page(pdf.pages[idx], rec, warn)
-        hi = next((i for i, t in enumerate(texts) if "승인이력" in nz(t)), None)
-        if hi is not None:
-            parse_history_page(pdf.pages[hi], rec)
-        else:
-            rec["_hist"] = []
+        notes = special_notes(pdf.pages[idx])
+        if notes:
+            rec["특기사항"] = notes
+        parse_history(front, rec)
         vi = next((i for i, t in enumerate(texts) if "업체정보" in nz(t)), None)
         if vi is not None:
             parse_vendor_page(pdf.pages[vi], rec)

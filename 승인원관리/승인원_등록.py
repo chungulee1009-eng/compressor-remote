@@ -90,12 +90,15 @@ def clean(s):
 
 
 def judge(s):
-    t = nz(s).replace("合格", "합격").replace("不合格", "불합격")
-    if "불합격" in t or "NG" in t.upper():
+    """판정 문구만 인식. 일반 문장(예: PACKING 의 'NG')을 판정으로 오인하지 않도록 완전일치 위주"""
+    t = nz(s).upper()
+    if not t:
+        return ""
+    if "불합격" in t or "不合格" in t or "부적합" in t or t in ("NG", "N.G", "FAIL", "X"):
         return "불합격"
-    if "합격" in t or t.upper() == "OK":
+    if "합격" in t or "合格" in t or t in ("OK", "O.K", "PASS", "적합", "양호", "○"):
         return "합격"
-    return clean(s)
+    return ""
 
 
 def parse_date(s):
@@ -132,7 +135,7 @@ def parse_approval_page(page, rec, warn):
     rec["승인일자"] = d
 
     rows = [r for t in page.extract_tables() for r in t]
-    in_items, cur_no, cur_cat = False, "", ""
+    in_items, cur_no, cur_cat, jcol = False, "", "", None
     sign_cols = None
     dist_head = None
     items = []
@@ -161,6 +164,7 @@ def parse_approval_page(page, rec, warn):
         # 검토/시험 항목
         if keys and keys[0] == "NO" and any("검토및시험사항" in k for k in keys):
             in_items = True
+            jcol = next((ci for ci, k in enumerate(keys) if k == "판정"), None)
             continue
         if in_items:
             if keys and keys[0].startswith("특기사항"):
@@ -174,9 +178,15 @@ def parse_approval_page(page, rec, warn):
                 cat = clean(cells[1]) if len(cells) > 1 and cells[1] else ""
                 cur_no = no or cur_no
                 cur_cat = cat or cur_cat
-                res = judge(body[-1]) if len(body) >= 2 else ""
+                raw = ""
+                if jcol is not None:
+                    raw = next((clean(c) for c in cells[jcol:] if c is not None and clean(c)), "")
+                elif len(body) >= 2:
+                    raw = body[-1]
+                res = judge(raw)
                 desc = [v for v in body if v not in (no, cat)]
-                desc = desc[:-1] if res and desc else desc
+                if raw and desc and desc[-1] == raw:
+                    desc = desc[:-1]
                 items.append({"NO": cur_no, "구분": cur_cat,
                               "검토 및 시험사항": clean(" ".join(desc)).lstrip("- ").strip(),
                               "판정": res})
@@ -191,7 +201,7 @@ def parse_approval_page(page, rec, warn):
             for ci, k in enumerate(keys):
                 if k.endswith("승인") and k != "승인":
                     rec["승인구분"] = rec.get("승인구분") or k
-                if k in ("合格", "합격", "불합격", "不合格"):
+                if judge(k) and k.upper() not in ("O", "○", "X"):
                     rec["최종판정"] = judge(k)
         if keys and keys[0] == "승인원" and dist_head:
             depts = []
@@ -336,6 +346,11 @@ def parse_pdf(path):
     if not rec.get("최종판정"):
         js = [it["판정"] for it in rec["_items"] if it["판정"]]
         rec["최종판정"] = "불합격" if "불합격" in js else ("합격" if js else "")
+        if js:
+            warn.append("최종판정=항목집계(승인도장 미인식)")
+    bad = [f"{it['구분']}:{it['검토 및 시험사항'][:20]}" for it in rec["_items"] if it["판정"] == "불합격"]
+    if rec.get("최종판정") == "불합격" or bad:
+        warn.append("불합격근거=" + ("; ".join(bad) if bad else "승인도장 불합격"))
 
     missing = [k for k in ("발행No", "품번", "승인일자", "버전", "최종판정") if not rec.get(k)]
     if missing:
@@ -397,27 +412,43 @@ def archive_name(rec, src):
     return rel
 
 
+KEEP_ON_REPARSE = ("No", "등록일시", "원본파일", "파일해시", "비고")
+
+
+def write_ledger_row(ws, r, rec):
+    for name in LEDGER_HEAD:
+        if name in KEEP_ON_REPARSE and name not in rec:
+            continue
+        v = rec.get(name, "")
+        ws.cell(row=r, column=COL[name], value=v if v != "" else None)
+    for name in ("최종판정", "파싱상태"):
+        ws.cell(row=r, column=COL[name]).fill = PatternFill(fill_type=None)
+
+
 def append_ledger(ws, rec, rel_path, sha):
     r = max(ledger_rows(ws) or [1]) + 1
     vals = dict(rec)
     vals.update({"No": r - 1, "등록일시": dt.datetime.now().replace(microsecond=0),
                  "원본파일": os.path.basename(rel_path), "파일해시": sha[:12]})
-    for name in LEDGER_HEAD:
-        v = vals.get(name, "")
-        ws.cell(row=r, column=COL[name], value=v if v != "" else None)
-    style_row(ws, r, len(LEDGER_HEAD),
-              wrap_cols=(COL["품목이름"], COL["변경내역"], COL["특기사항"], COL["비고"], COL["원본파일"]))
-    ws.cell(row=r, column=COL["승인일자"]).number_format = "yyyy-mm-dd"
-    ws.cell(row=r, column=COL["등록일시"]).number_format = "yyyy-mm-dd hh:mm"
+    write_ledger_row(ws, r, vals)
+    finish_ledger_row(ws, r, rec)
     link = ws.cell(row=r, column=COL["원본파일"])
     link.hyperlink = rel_path.replace(os.sep, "/")
     link.font = F_LINK
+    return r
+
+
+def finish_ledger_row(ws, r, rec):
+    style_row(ws, r, len(LEDGER_HEAD),
+              wrap_cols=(COL["품목이름"], COL["변경내역"], COL["특기사항"], COL["비고"], COL["원본파일"],
+                         COL["파싱상태"]))
+    ws.cell(row=r, column=COL["승인일자"]).number_format = "yyyy-mm-dd"
+    ws.cell(row=r, column=COL["등록일시"]).number_format = "yyyy-mm-dd hh:mm"
     if rec.get("최종판정") == "불합격":
         ws.cell(row=r, column=COL["최종판정"]).fill = C_BAD
     if rec.get("파싱상태") != "정상":
         ws.cell(row=r, column=COL["파싱상태"]).fill = C_NOTE
-    ws.auto_filter.ref = f"A1:{get_column_letter(len(LEDGER_HEAD))}{r}"
-    return r
+    ws.auto_filter.ref = f"A1:{get_column_letter(len(LEDGER_HEAD))}{max(ledger_rows(ws) or [r])}"
 
 
 def append_simple(ws, cols, rows, wrap_names=()):
@@ -629,8 +660,135 @@ def save_workbook(wb):
         return False
 
 
+LOG_COLS = [("처리일시", 17), ("구분", 9), ("파일명", 45), ("발행No", 22), ("내용", 70)]
+
+
+def write_log(wb, entries):
+    """처리로그 시트에 이번 실행 결과(등록/중복/실패/재분석) 누적"""
+    if not entries:
+        return
+    if "처리로그" not in wb.sheetnames:
+        style_header(wb.create_sheet("처리로그"), LOG_COLS)
+    ws = wb["처리로그"]
+    now = dt.datetime.now().replace(microsecond=0)
+    r = ws.max_row
+    while r > 1 and ws.cell(row=r, column=1).value is None:
+        r -= 1
+    for kind, fname, issue, msg in entries:
+        r += 1
+        for ci, v in enumerate((now, kind, fname, issue, msg), 1):
+            ws.cell(row=r, column=ci, value=v)
+        style_row(ws, r, len(LOG_COLS), (3, 5))
+        ws.cell(row=r, column=1).number_format = "yyyy-mm-dd hh:mm"
+        if kind in ("실패", "중복"):
+            ws.cell(row=r, column=2).fill = C_BAD if kind == "실패" else C_NOTE
+    ws.auto_filter.ref = f"A1:E{r}"
+
+
+def explain(e):
+    """자주 발생하는 오류를 한글 안내로 변환"""
+    if isinstance(e, PermissionError):
+        return ("승인원_관리대장.xlsx 파일에 접근할 수 없습니다.\n"
+                "       ① 엑셀에서 파일이 열려 있으면 닫아주세요.\n"
+                "       ② OneDrive 동기화 중(파란 화살표)이면 완료 후 다시 실행하세요.")
+    if isinstance(e, FileNotFoundError):
+        return f"파일을 찾을 수 없습니다: {getattr(e, 'filename', '')}"
+    msg = str(e)
+    if "No /Root object" in msg or "PDFSyntaxError" in type(e).__name__:
+        return "PDF 파일이 손상되었거나 PDF 형식이 아닙니다."
+    if "password" in msg.lower() or "encrypt" in msg.lower():
+        return "암호가 걸린 PDF 입니다. 암호 해제 후 다시 넣어주세요."
+    if "zip" in msg.lower() and "file" in msg.lower():
+        return "승인원_관리대장.xlsx 파일이 손상되었습니다. 백업 폴더의 최신 파일로 교체하세요."
+    return f"{type(e).__name__}: {msg}"
+
+
+def load_ledger():
+    try:
+        return open_workbook()
+    except Exception as e:
+        print("\n[오류] " + explain(e))
+        return None
+
+
+def reanalyze():
+    """보관 중인 PDF 를 개선된 인식 로직으로 다시 분석해 기존 행을 갱신 (No/등록일시/비고 유지)"""
+    wb = load_ledger()
+    if wb is None:
+        return 2
+    ws_l = wb["승인원대장"]
+    files = {}
+    for root, _, fs in os.walk(ARCHIVE):
+        for f in fs:
+            files.setdefault(f, os.path.join(root, f))
+    items, hists, seen, logs, changed = {}, [], set(), [], 0
+    for r in ledger_rows(ws_l):
+        g = lambda n: ws_l.cell(row=r, column=COL[n]).value
+        fname, issue = g("원본파일"), g("발행No")
+        path = files.get(str(fname or ""))
+        if not path:
+            logs.append(("실패", fname, issue, "재분석: 보관 폴더에서 원본 PDF 를 찾지 못함 (기존 값 유지)"))
+            continue
+        try:
+            rec = parse_pdf(path)
+        except Exception as e:
+            logs.append(("실패", fname, issue, "재분석: " + explain(e)))
+            continue
+        before = {k: g(k) for k in ("최종판정", "외관", "치수", "성능", "기타", "버전", "승인구분")}
+        if "재등록" in str(g("파싱상태") or ""):
+            rec["파싱상태"] += " / " + str(g("파싱상태")).split(" / ", 1)[-1]
+        write_ledger_row(ws_l, r, rec)
+        finish_ledger_row(ws_l, r, rec)
+        diff = [f"{k}: {before[k] or '-'} → {rec.get(k) or '-'}" for k in before
+                if (before[k] or "") != (rec.get(k) or "")]
+        if diff:
+            changed += 1
+            logs.append(("재분석", fname, issue, "변경 " + ", ".join(diff)))
+            print(f"[변경] {issue}  " + ", ".join(diff))
+        base = {"발행No": rec.get("발행No"), "품번": rec.get("품번"), "버전": rec.get("버전")}
+        items[r] = [dict(base, **it) for it in rec["_items"]]
+        for h in rec["_hist"]:
+            k = (rec.get("품번"), h["승인일자"], h["변경 후 버전"])
+            if k not in seen:
+                seen.add(k)
+                hists.append(dict(base, **h))
+
+    # 검토항목 / 승인이력 시트 재생성 (원본을 못 찾은 발행No 의 기존 행은 보존)
+    reparsed = {ws_l.cell(row=r, column=COL["발행No"]).value for r in items}
+    for title, cols, new_rows, wrap in (
+            ("검토항목", ITEM_COLS, [x for v in items.values() for x in v], ("검토 및 시험사항",)),
+            ("승인이력", HIST_COLS, hists, ("변경 전 내용", "변경 후 내용"))):
+        old = wb[title]
+        keep = [dict(zip([c for c, _ in cols], row)) for row in old.iter_rows(min_row=2, values_only=True)
+                if row[0] and row[0] not in reparsed]
+        pos = wb.sheetnames.index(title)
+        wb.remove(old)
+        ws = wb.create_sheet(title, pos)
+        style_header(ws, cols)
+        append_simple(ws, cols, keep + new_rows, wrap_names=wrap)
+
+    rebuild_latest(wb)
+    rebuild_summary(wb)
+    refresh_links(wb)
+    logs.append(("재분석", "", "", f"전체 {len(ledger_rows(ws_l))}건 재분석, 판정/버전 변경 {changed}건"))
+    write_log(wb, logs)
+    try:
+        if not save_workbook(wb):
+            return 2
+    except Exception as e:
+        print("\n[오류] " + explain(e))
+        return 2
+    for kind, fname, _, msg in logs:
+        if kind == "실패":
+            print(f"[실패] {fname} - {msg}")
+    print(f"\n재분석 완료: 전체 {len(ledger_rows(ws_l))}건 / 판정·버전 변경 {changed}건 (상세: 처리로그 시트)")
+    return 0
+
+
 def main(argv):
     os.makedirs(INBOX, exist_ok=True)
+    if argv and argv[0] in ("--재분석", "--reparse"):
+        return reanalyze()
     if argv:
         sources, move = [os.path.abspath(p) for p in argv], False
     else:
@@ -641,7 +799,9 @@ def main(argv):
     if not sources:
         print(f"[안내] 처리할 PDF 가 없습니다. '{os.path.relpath(INBOX, BASE)}' 폴더에 넣거나 PDF 를 드래그하세요.")
         if os.path.exists(XLSX):
-            wb = load_workbook(XLSX)
+            wb = load_ledger()
+            if wb is None:
+                return 2
             n = refresh_links(wb)
             if n:
                 if not save_workbook(wb):
@@ -649,7 +809,10 @@ def main(argv):
                 print(f"[링크] 원본파일 링크 {n}건을 현재 PC 경로로 갱신했습니다.")
         return 0
 
-    wb = open_workbook()
+    wb = load_ledger()
+    if wb is None:
+        print("       (PDF 는 수신함에 그대로 남아 있습니다)")
+        return 2
     ws_l = wb["승인원대장"]
     known_hash = {str(ws_l.cell(row=r, column=COL["파일해시"]).value): r for r in ledger_rows(ws_l)}
     known_issue = {(ws_l.cell(row=r, column=COL["발행No"]).value,
@@ -672,7 +835,7 @@ def main(argv):
         try:
             rec = parse_pdf(src)
         except Exception as e:  # 손상/암호화 PDF 등
-            failed.append((src, f"{type(e).__name__}: {e}"))
+            failed.append((src, explain(e)))
             continue
         if not rec.get("품번") and not rec.get("발행No"):
             failed.append((src, "승인서 양식을 인식하지 못함 (품번/발행No 없음)"))
@@ -701,10 +864,17 @@ def main(argv):
         print(f"[등록] {name}\n       -> {rec.get('발행No')} | {rec.get('품번')} | {rec.get('승인구분')} "
               f"{rec.get('버전')} | {rec.get('승인일자')} | {rec.get('최종판정')} | {rec['파싱상태']}")
 
+    logs = [("등록", os.path.basename(src), rec.get("발행No"),
+             f"{rec.get('품번')} {rec.get('승인구분')} {rec.get('버전')} / {rec.get('최종판정')} / {rec['파싱상태']}")
+            for src, _, rec in plan]
+    logs += [("중복", os.path.basename(src), "", why) for src, why in skipped]
+    logs += [("실패", os.path.basename(src), "", why) for src, why in failed]
     if plan:
         rebuild_latest(wb)
         rebuild_summary(wb)
         refresh_links(wb, {os.path.basename(rel): os.path.join(BASE, rel) for _, rel, _ in plan})
+    write_log(wb, logs)
+    if logs:
         if not save_workbook(wb):
             return 2
         for src, rel, _ in plan:
@@ -718,14 +888,23 @@ def main(argv):
                 os.makedirs(folder, exist_ok=True)
                 shutil.move(src, os.path.join(folder, os.path.basename(src)))
     for src, why in skipped:
-        print(f"[건너뜀] {os.path.basename(src)} - {why}")
+        print(f"[중복] {os.path.basename(src)} - {why} → 승인원_수신함\\중복 폴더로 이동" if move else
+              f"[중복] {os.path.basename(src)} - {why}")
     for src, why in failed:
-        print(f"[실패] {os.path.basename(src)} - {why}")
-    print(f"\n완료: 등록 {len(plan)}건 / 건너뜀 {len(skipped)}건 / 실패 {len(failed)}건")
+        print(f"[실패] {os.path.basename(src)} - {why}" + (" → 승인원_수신함\\오류 폴더로 이동" if move else ""))
+    print(f"\n완료: 등록 {len(plan)}건 / 중복 {len(skipped)}건 / 실패 {len(failed)}건 (상세: 처리로그 시트)")
     if plan:
         print(f"대장: {XLSX}")
     return 0 if not failed else 1
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except Exception as e:  # 예상 못한 오류: 한글 안내 + 상세 로그 파일
+        import traceback
+        with open(os.path.join(BASE, "오류로그.txt"), "a", encoding="utf-8") as f:
+            f.write(f"\n[{dt.datetime.now():%Y-%m-%d %H:%M:%S}]\n{traceback.format_exc()}")
+        print("\n[오류] " + explain(e))
+        print("       상세 내용은 오류로그.txt 에 저장했습니다. 화면 캡처와 함께 전달해 주세요.")
+        sys.exit(3)

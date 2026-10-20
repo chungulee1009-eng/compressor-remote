@@ -4,3 +4,7 @@ qrcode[pil]>=7.4        # /join 설치안내 QR
 gunicorn>=21.2          # 클라우드 배포용 WSGI 서버 (로컬 실행에는 불필요)
 # 선택: 2FA(TOTP) 사용 시
 pyotp>=2.9
+# 임가공 발주서 작성기(subcon_po)
+openpyxl>=3.1
+pyxlsb>=1.0.10
+pywin32>=306; sys_platform == "win32"   # Excel 로 .xlsb 원본 서식 그대로 저장

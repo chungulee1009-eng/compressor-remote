@@ -10,3 +10,4 @@ server/STOP
 *.apk
 *.aab
 build-apk/output/
+subcon_po/data/

@@ -69,6 +69,7 @@ python run.py
 | `web/app.py` | Flask 라우트(페이지 + REST API) |
 | `web/templates`, `web/static` | 대시보드 / 유닛상세(1h·24h·7d 트렌드) / 알람 / 관리자 + PWA |
 | `server/` | 상시 실행 스크립트(예약 작업 등록/해제, 감시 재시작, 상태 확인) |
+| `subcon_po/` | 임가공 발주서(수삽) 자동 작성기 — 생산계획서 업로드 → 수삽 탭 갱신 (`임가공발주서_실행.bat`, [설명](subcon_po/README.md)) |
 
 현황판 상단 KPI: 가동 대수, **운영 마력(가동중 HP / 전체 HP)**, 운영 출력(kW), 통신두절, 발생 알람.
 1대 정격은 `config.yaml` 의 `equipment` (기본 100 HP / 74.6 kW).

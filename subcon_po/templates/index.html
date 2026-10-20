@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block body %}
+{% if error %}<div class="err">⚠ {{ error }}</div>{% endif %}
+<form class="card" method="post" action="/run" enctype="multipart/form-data">
+  <h2>1. 파일 업로드</h2>
+  <label>생산계획서 (SET, OPTION 생산 발주서) *</label>
+  <input type="file" name="plan" accept=".xlsx,.xlsm,.xlsb" required>
+  <label>임가공 발주서 (수삽 / SMD / sublist 탭 포함)</label>
+  <input type="file" name="order" accept=".xlsx,.xlsm,.xlsb" {% if not last_order %}required{% endif %}>
+  <div class="hint">
+    {% if last_order %}생략 시 마지막으로 올린 발주서(<b>{{ last_order }}</b>)를 사용합니다.
+    {% else %}최초 1회는 필수입니다. 이후에는 생략 가능(마지막 발주서 재사용).{% endif %}
+  </div>
+
+  <h2 style="margin-top:20px">2. 납기 설정</h2>
+  <div class="row">
+    <div><label>계획 년도</label><input type="number" name="year" placeholder="자동(계획서 제목)"></div>
+    <div><label>계획 월</label><input type="number" name="month" min="1" max="12" placeholder="자동"></div>
+    <div><label>일수량 당김(EA)</label><input type="number" name="pull" value="{{ defaults.pull }}" min="0"></div>
+  </div>
+  <label>추가 휴무일 (회사 휴무 등, YYYY-MM-DD 쉼표 구분)</label>
+  <input type="text" name="holidays" placeholder="예) 2026-11-13, 2026-12-31">
+  <label>SUBLIST 미등록 모델 → 신흥양산 칸 기입 문구</label>
+  <input type="text" name="note" value="{{ defaults.note }}">
+
+  <details style="margin-top:14px">
+    <summary>적용 규칙</summary>
+    <ul class="rules">
+      <li>제외: 모델구분 {{ rules.EXCLUDE_CATEGORY|join(' / ') }} · 모델명 {{ rules.EXCLUDE_MODEL_CONTAINS|join(' / ') }} 포함 · {{ rules.EXCLUDE_MODEL_PREFIX|join(' / ') }} 시작</li>
+      <li>납기: 생산계획일 D-{{ rules.LEAD_DAYS }} 영업일 (토·일·공휴일 제외)</li>
+      <li>일수량 +{{ defaults.pull }}EA 당김 — 예) 152EA가 2일 80 / 3일 72 → 2일 130 / 3일 22</li>
+      <li>SUBLIST 미등록 모델 → 신흥양산 칸에 문구 기입</li>
+      <li>수삽 탭 첫 구간(SMD버퍼 위)만 갱신 · 기존 선진행/신흥양산 메모는 같은 날짜·모델·바이어 행에 승계 · 날짜 없는 수동행은 하단 보존</li>
+    </ul>
+  </details>
+  <div style="margin-top:16px"><button type="submit">발주서 작성</button></div>
+</form>
+{% endblock %}

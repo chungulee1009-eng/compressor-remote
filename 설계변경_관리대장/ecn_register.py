@@ -26,7 +26,8 @@ except ImportError as e:  # pragma: no cover
     sys.exit(1)
 
 BASE = Path(__file__).resolve().parent
-LEDGER = BASE / "설계변경_관리대장.xlsx"
+LEDGER_LEGACY = BASE / "설계변경_관리대장.xlsx"      # v1.0 파일명 (발견 시 이어서 사용)
+LEDGER_GLOB = "*년_SA_설계변경 관리대장_*.xlsx"
 INBOX = BASE / "설변_수신함"
 ARCHIVE = BASE / "설변_보관"
 BACKUP = BASE / "백업"
@@ -71,6 +72,28 @@ def sha256(path: Path) -> str:
         for chunk in iter(lambda: f.read(1 << 20), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+def ledger_name(year: int, day: dt.date) -> str:
+    """대장 파일명 : 2026년_SA_설계변경 관리대장_10.20.xlsx (최종 저장일 기준)"""
+    return f"{year}년_SA_설계변경 관리대장_{day:%m.%d}.xlsx"
+
+
+def find_ledgers():
+    """폴더 안의 관리대장 파일 (최근 저장 순)."""
+    found = [p for p in BASE.glob(LEDGER_GLOB) if not p.name.startswith("~$")]
+    if LEDGER_LEGACY.exists():
+        found.append(LEDGER_LEGACY)
+    return sorted(found, key=lambda p: p.stat().st_mtime, reverse=True)
+
+
+def running_from_temp() -> bool:
+    """압축파일을 풀지 않고 탐색기에서 바로 실행하면 매번 새 임시 폴더에서 실행되어 누적이 안 된다."""
+    if not sys.platform.startswith("win"):
+        return False
+    import tempfile
+    b = str(BASE).lower()
+    return ".zip" in b or b.startswith(str(Path(tempfile.gettempdir()).resolve()).lower())
 
 
 def alert(title: str, msg: str, error: bool = True) -> None:
@@ -575,9 +598,8 @@ def create_list_sheet(wb, year: int, author: str):
 
 
 class Ledger:
-    def __init__(self, path: Path):
-        self.path = path
-        if path.exists():
+    def __init__(self, path: Path | None):
+        if path is not None and path.exists():
             self.wb = load_workbook(path)
         else:
             self.wb = Workbook()
@@ -839,8 +861,13 @@ class Ledger:
         ws.page_setup.fitToWidth, ws.page_setup.fitToHeight = 1, 1
         ws.sheet_properties.pageSetUpPr.fitToPage = True
 
-    def save(self):
-        self.wb.save(self.path)
+    def years(self):
+        return sorted(int(m.group(1)) for n in self.wb.sheetnames
+                      if (m := re.fullmatch(r"설계변경\((\d{4})\)", n)))
+
+    def save(self, path: Path):
+        self.wb.calculation.fullCalcOnLoad = True   # 열 때 요약 수식 재계산
+        self.wb.save(path)
 
 
 # ───────────────────────── 파일 처리 흐름 ─────────────────────────
@@ -860,8 +887,8 @@ def backup(path: Path):
     if not path.exists():
         return
     BACKUP.mkdir(exist_ok=True)
-    shutil.copy2(path, BACKUP / f"{path.stem}_{dt.datetime.now():%Y%m%d_%H%M%S}{path.suffix}")
-    olds = sorted(BACKUP.glob(f"{path.stem}_*{path.suffix}"))
+    shutil.copy2(path, BACKUP / f"{dt.datetime.now():%Y%m%d_%H%M%S}_{path.name}")
+    olds = sorted(BACKUP.glob("[0-9]*_*.xlsx"))
     for f in olds[:-BACKUP_KEEP]:
         f.unlink()
 
@@ -898,18 +925,31 @@ def main(argv):
     files = collect(argv) if argv else sorted(p for p in INBOX.iterdir()
                                               if p.is_file() and p.suffix.lower() == ".pdf")
     print("=" * 64)
-    print(" 설계변경 통보서 PDF -> 설계변경_관리대장.xlsx 등록")
+    print(" 설계변경 통보서 PDF -> 설계변경 관리대장(엑셀) 누적 등록")
     print(f" 모드: {'수신함(이동)' if inbox_mode else '드래그(복사)'}   대상 PDF: {len(files)}개")
     print("=" * 64)
     if not files:
         print(f"\n등록할 PDF 가 없습니다. '{INBOX.name}' 폴더에 PDF 를 넣고 다시 실행하세요.")
         return 0
-    if is_locked(LEDGER):
+    if running_from_temp():
+        alert("설계변경 등록 - 실행 위치 오류",
+              "압축파일(zip) 안에서 바로 실행 중입니다.\n이 상태에서는 매번 새 임시 폴더에 저장되어 등록 내용이 누적되지 않습니다.\n\n"
+              "zip 파일 우클릭 → [압축 풀기] 로 고정 폴더(예: D:\\SA\\설계변경)에 푼 뒤\n그 폴더의 설계변경_등록.bat 을 실행해 주세요.")
+        return 3
+    ledgers = find_ledgers()
+    src = ledgers[0] if ledgers else None
+    if src:
+        print(f" 누적 대상 : {src.name}")
+        for other in ledgers[1:]:
+            print(f"   ※ 다른 대장 파일 무시 : {other.name} (최근 저장 파일 기준으로 누적)")
+    else:
+        print(" 누적 대상 : (없음) 새 관리대장 생성")
+    if src and is_locked(src):
         alert("설계변경 등록 - 저장 불가",
-              f"{LEDGER.name} 파일이 열려 있습니다.\n엑셀을 닫고 다시 실행해 주세요.\n(PDF 는 이동되지 않았습니다)")
+              f"{src.name} 파일이 열려 있습니다.\n엑셀을 닫고 다시 실행해 주세요.\n(PDF 는 이동되지 않았습니다)")
         return 2
 
-    ledger = Ledger(LEDGER)
+    ledger = Ledger(src)
     seen_hash = {}
     plan, results, dups = [], [], []   # plan: (src, dest) 저장 성공 후 실행
     for f in files:
@@ -953,31 +993,39 @@ def main(argv):
         plan.append((f, dest))
 
     added = sum(1 for r in results if r[0] in ("등록", "확인필요"))
+    target = None
     if added:
-        backup(LEDGER)
         ledger.rebuild()
+        target = BASE / ledger_name((ledger.years() or [dt.date.today().year])[-1], dt.date.today())
+        same = src is not None and src.resolve() == target.resolve()
         try:
-            ledger.save()
+            if not same and is_locked(target):
+                raise PermissionError(target.name)
+            if src:
+                backup(src)
+            ledger.save(target)
         except PermissionError:
             alert("설계변경 등록 - 저장 불가",
-                  f"{LEDGER.name} 저장에 실패했습니다 (파일이 열려 있음).\n엑셀을 닫고 다시 실행해 주세요.\n(PDF 는 이동되지 않았습니다)")
+                  f"{target.name} 저장에 실패했습니다 (파일이 열려 있음).\n엑셀을 닫고 다시 실행해 주세요.\n(PDF 는 이동되지 않았습니다)")
             return 2
+        if src and not same:
+            src.unlink()          # 이전 날짜 파일명은 정리 (백업 폴더에 보관됨)
 
-    for src, dest in plan:   # 저장 성공 후에만 파일 이동/복사
+    for pdf, dest in plan:   # 저장 성공 후에만 파일 이동/복사
         if dest is None:
             continue
         if dest.suffix.lower() != ".pdf":     # 중복/오류 폴더
-            dest = unique_target(dest, src.name)
-        if dest.exists() and dest.resolve() == src.resolve():
+            dest = unique_target(dest, pdf.name)
+        if dest.exists() and dest.resolve() == pdf.resolve():
             continue
         dest.parent.mkdir(parents=True, exist_ok=True)
         if inbox_mode:
             if dest.exists():
-                src.unlink()
+                pdf.unlink()
             else:
-                shutil.move(str(src), str(dest))
+                shutil.move(str(pdf), str(dest))
         elif not dest.exists():
-            shutil.copy2(src, dest)
+            shutil.copy2(pdf, dest)
 
     print()
     for kind, name, msg in results:
@@ -985,10 +1033,15 @@ def main(argv):
     cnt = {k: sum(1 for r in results if r[0] == k) for k in ("등록", "확인필요", "중복", "오류")}
     print("\n" + "-" * 64)
     print(f" 등록 {cnt['등록']}건 | 확인필요 {cnt['확인필요']}건 | 중복 {cnt['중복']}건 | 오류 {cnt['오류']}건")
-    if added:
-        print(f" 저장: {LEDGER}")
+    if target:
+        print(f" 저장: {target}  (누적 총 {len(ledger.records)}건)")
     print("-" * 64)
 
+    if target:
+        alert("설계변경 등록 - 완료",
+              f"이번 등록 {added}건 / 누적 총 {len(ledger.records)}건\n\n저장 파일 : {target.name}"
+              + (f"\n(이전 파일 {src.name} → 새 파일명으로 변경, 이전본은 백업 폴더 보관)" if src and src.name != target.name else ""),
+              error=False)
     if dups:
         alert("설계변경 등록 - 중복 PDF",
               f"이미 등록된 설계변경 통보서입니다. 등록하지 않았습니다. ({len(dups)}건)\n\n"

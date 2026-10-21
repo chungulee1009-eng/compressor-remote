@@ -23,6 +23,9 @@ from engines import approval, ecn
 BASE = Path(__file__).resolve().parent
 DATA = Path(os.environ.get("SA_DATA_DIR", BASE / "data")).resolve()
 ECN_DIR, APR_DIR = DATA / "설계변경", DATA / "승인원"
+# 기존 승인원 도구 폴더(승인원_관리대장.xlsx / 승인원_보관)에 풀었으면 그 대장을 그대로 이어서 사용
+if "SA_DATA_DIR" not in os.environ and ((BASE / "승인원_관리대장.xlsx").exists() or (BASE / "승인원_보관").is_dir()):
+    APR_DIR = BASE
 UPLOAD_DIR, UNSORTED_DIR = DATA / "_업로드", DATA / "_미분류"
 HOST = os.environ.get("SA_HOST", "127.0.0.1")
 PORT = int(os.environ.get("SA_PORT", "8765"))

@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SA 문서 통합관리</title>
+<style>
+  :root {
+    --bg: #f3f5f9; --card: #ffffff; --ink: #1b2433; --sub: #5b6678; --line: #dfe4ec;
+    --brand: #1f3864; --brand-2: #2f5597; --accent: #e8eef8;
+    --ok: #1e7b3c; --ok-bg: #e3f4e8; --warn: #8a6100; --warn-bg: #fff3cd;
+    --dup: #a2321b; --dup-bg: #fde4dd; --err: #6b2a8a; --err-bg: #f1e4f8;
+    --ecn: #2f5597; --apr: #0e7c86;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font-family: "Malgun Gothic", "맑은 고딕", "Apple SD Gothic Neo", sans-serif; font-size: 14px; }
+  header { background: var(--brand); color: #fff; padding: 18px 24px; }
+  header h1 { margin: 0; font-size: 20px; letter-spacing: -0.3px; }
+  header p { margin: 4px 0 0; font-size: 12.5px; opacity: .8; }
+  main { max-width: 1100px; margin: 0 auto; padding: 20px 16px 48px; }
+
+  .ledgers { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; }
+  .ledger { display: flex; align-items: center; gap: 16px; border-left: 6px solid var(--ecn); }
+  .ledger.approval { border-left-color: var(--apr); }
+  .ledger .meta { flex: 1; min-width: 0; }
+  .ledger .tag { font-size: 12px; font-weight: 700; color: var(--ecn); }
+  .ledger.approval .tag { color: var(--apr); }
+  .ledger .count { font-size: 28px; font-weight: 800; line-height: 1.2; }
+  .ledger .count small { font-size: 13px; font-weight: 600; color: var(--sub); margin-left: 2px; }
+  .ledger .file { font-size: 12px; color: var(--sub); overflow-wrap: anywhere; }
+  .new { display: none; margin-left: 6px; background: #ff4d4f; color: #fff; font-size: 10.5px;
+         padding: 1px 6px; border-radius: 8px; vertical-align: middle; }
+  .ledger.updated .new { display: inline-block; }
+
+  .btn { border: 0; border-radius: 8px; padding: 10px 16px; font-size: 14px; font-weight: 700;
+         cursor: pointer; font-family: inherit; white-space: nowrap; }
+  .btn:disabled { opacity: .45; cursor: not-allowed; }
+  .btn.dl { background: var(--accent); color: var(--brand); }
+  .btn.dl:not(:disabled):hover { background: #d6e1f3; }
+  .btn.run { background: var(--brand-2); color: #fff; padding: 13px 34px; font-size: 16px; }
+  .btn.run:not(:disabled):hover { background: var(--brand); }
+  .btn.ghost { background: transparent; color: var(--sub); padding: 8px 10px; font-weight: 600; }
+
+  h2 { font-size: 15px; margin: 26px 0 10px; color: var(--brand); }
+  .drop { border: 2px dashed #a9b6cc; border-radius: 12px; background: #fafbfd; padding: 30px 16px;
+          text-align: center; cursor: pointer; transition: .15s; }
+  .drop.over { border-color: var(--brand-2); background: var(--accent); }
+  .drop b { font-size: 16px; }
+  .drop p { margin: 6px 0 0; color: var(--sub); font-size: 12.5px; }
+  .files { margin-top: 10px; display: none; }
+  .files.show { display: block; }
+  .file-row { display: flex; align-items: center; gap: 10px; padding: 7px 10px; border-bottom: 1px solid var(--line); }
+  .file-row:last-child { border-bottom: 0; }
+  .file-row .nm { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  .file-row .sz { color: var(--sub); font-size: 12px; }
+  .file-row .x { border: 0; background: none; color: #999; font-size: 18px; cursor: pointer; line-height: 1; }
+  .actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
+  .hint { color: var(--sub); font-size: 12.5px; }
+
+  .summary { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+  .chip { padding: 5px 12px; border-radius: 16px; font-weight: 700; font-size: 13px; }
+  .k-등록 { background: var(--ok-bg); color: var(--ok); }
+  .k-확인필요 { background: var(--warn-bg); color: var(--warn); }
+  .k-중복 { background: var(--dup-bg); color: var(--dup); }
+  .k-오류 { background: var(--err-bg); color: var(--err); }
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; background: var(--card); }
+  th, td { padding: 9px 10px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+  th { background: #eef2f8; font-size: 12.5px; color: var(--sub); white-space: nowrap; }
+  td .badge { display: inline-block; padding: 2px 8px; border-radius: 6px; font-size: 12px; font-weight: 700; white-space: nowrap; }
+  .t-설계변경 { background: #e2e9f6; color: var(--ecn); }
+  .t-승인원 { background: #dcf1f2; color: var(--apr); }
+  .t-미분류 { background: #eee; color: #666; }
+  td.msg { color: var(--sub); font-size: 13px; overflow-wrap: anywhere; }
+  td.key { font-weight: 700; white-space: nowrap; }
+  .empty { color: var(--sub); text-align: center; padding: 18px; }
+
+  .spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid rgba(255,255,255,.5);
+             border-top-color: #fff; border-radius: 50%; animation: spin .8s linear infinite; vertical-align: -3px; margin-right: 6px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .modal-bg { position: fixed; inset: 0; background: rgba(15, 23, 42, .45); display: none;
+              align-items: center; justify-content: center; padding: 16px; z-index: 10; }
+  .modal-bg.show { display: flex; }
+  .modal { background: #fff; border-radius: 14px; max-width: 560px; width: 100%; max-height: 80vh;
+           display: flex; flex-direction: column; box-shadow: 0 20px 50px rgba(0,0,0,.25); }
+  .modal h3 { margin: 0; padding: 16px 20px; font-size: 17px; border-bottom: 1px solid var(--line); }
+  .modal.dup h3 { color: var(--dup); }
+  .modal.err h3 { color: var(--err); }
+  .modal .body { padding: 14px 20px; overflow-y: auto; }
+  .modal .body .it { padding: 8px 0; border-bottom: 1px dashed var(--line); }
+  .modal .body .it:last-child { border-bottom: 0; }
+  .modal .body .it b { overflow-wrap: anywhere; }
+  .modal .body .it div { color: var(--sub); font-size: 13px; margin-top: 3px; overflow-wrap: anywhere; }
+  .modal .foot { padding: 12px 20px; border-top: 1px solid var(--line); text-align: right; }
+  .modal .foot .btn { background: var(--brand-2); color: #fff; }
+  @media (max-width: 560px) {
+    header { padding: 14px 16px; }
+    .ledger { flex-wrap: wrap; }
+    .btn.run { width: 100%; }
+    thead { display: none; }
+    table, tbody, tr, td { display: block; width: 100%; }
+    tr { border-bottom: 1px solid var(--line); padding: 8px 0; }
+    td { border: 0; padding: 3px 4px; }
+    td:nth-child(1), td:nth-child(2) { display: inline-block; width: auto; }
+    td.key:empty { display: none; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>SA 문서 통합관리 · 승인원 / 설계변경</h1>
+  <p>PDF 를 올리고 [실행] 을 누르면 문서 종류를 자동 판별해 각 관리대장 엑셀에 누적 정리합니다.</p>
+</header>
+<main>
+  <section class="ledgers">
+    <div class="card ledger ecn" id="card-ecn">
+      <div class="meta">
+        <div class="tag">설계변경 관리대장<span class="new">NEW</span></div>
+        <div class="count"><span id="ecn-count">0</span><small>건 누적</small></div>
+        <div class="file" id="ecn-file">아직 등록된 문서가 없습니다</div>
+      </div>
+      <button class="btn dl" id="ecn-dl" disabled>엑셀 다운로드</button>
+    </div>
+    <div class="card ledger approval" id="card-approval">
+      <div class="meta">
+        <div class="tag">승인원 관리대장<span class="new">NEW</span></div>
+        <div class="count"><span id="approval-count">0</span><small>건 누적</small></div>
+        <div class="file" id="approval-file">아직 등록된 문서가 없습니다</div>
+      </div>
+      <button class="btn dl" id="approval-dl" disabled>엑셀 다운로드</button>
+    </div>
+  </section>
+
+  <h2>① 문서 올리기</h2>
+  <div class="card">
+    <div class="drop" id="drop">
+      <b>여기로 PDF 를 끌어다 놓거나 클릭해서 선택</b>
+      <p>승인원 · 설계변경 통보서 PDF 를 섞어서 여러 개 올려도 됩니다 · 기존 관리대장 엑셀(.xlsx)도 가져올 수 있습니다</p>
+      <input type="file" id="picker" accept=".pdf,.xlsx" multiple hidden>
+    </div>
+    <div class="files" id="files"></div>
+    <div class="actions">
+      <span class="hint" id="hint">선택된 파일 없음</span>
+      <div>
+        <button class="btn ghost" id="clear" hidden>전체 지우기</button>
+        <button class="btn run" id="run" disabled>실행</button>
+      </div>
+    </div>
+  </div>
+
+  <h2>② 처리 결과</h2>
+  <div class="card">
+    <div class="summary" id="summary"></div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>구분</th><th>결과</th><th>파일명</th><th>문서번호</th><th>내용</th></tr></thead>
+        <tbody id="rows"><tr><td colspan="5" class="empty">실행하면 결과가 여기에 표시됩니다.</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</main>
+
+<div class="modal-bg" id="modal-bg">
+  <div class="modal" id="modal">
+    <h3 id="modal-title"></h3>
+    <div class="body" id="modal-body"></div>
+    <div class="foot"><button class="btn" id="modal-ok">확인</button></div>
+  </div>
+</div>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  let picked = [];
+  let modalQueue = [];
+
+  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const size = (n) => n > 1048576 ? (n / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(n / 1024)) + " KB";
+
+  function renderLedger(kind, info, updated) {
+    $(kind + "-count").textContent = info.count;
+    $(kind + "-file").textContent = info.exists ? `${info.download_name} · 최종 저장 ${info.saved}` : "아직 등록된 문서가 없습니다";
+    $(kind + "-dl").disabled = !info.exists;
+    $("card-" + kind).classList.toggle("updated", !!updated);
+  }
+
+  async function refresh() {
+    const r = await fetch("/api/status");
+    const s = await r.json();
+    renderLedger("ecn", s.ecn);
+    renderLedger("approval", s.approval);
+  }
+
+  function renderFiles() {
+    const box = $("files");
+    box.classList.toggle("show", picked.length > 0);
+    box.innerHTML = picked.map((f, i) =>
+      `<div class="file-row"><span class="nm">${esc(f.name)}</span><span class="sz">${size(f.size)}</span>` +
+      `<button class="x" data-i="${i}" title="빼기">×</button></div>`).join("");
+    $("hint").textContent = picked.length ? `${picked.length}개 파일 선택됨` : "선택된 파일 없음";
+    $("run").disabled = picked.length === 0;
+    $("clear").hidden = picked.length === 0;
+  }
+
+  function addFiles(list) {
+    for (const f of list) {
+      if (!/\.(pdf|xlsx)$/i.test(f.name)) continue;
+      if (!picked.some((p) => p.name === f.name && p.size === f.size)) picked.push(f);
+    }
+    renderFiles();
+  }
+
+  function showModal(kind, title, items) {
+    modalQueue.push({ kind, title, items });
+    if (!$("modal-bg").classList.contains("show")) nextModal();
+  }
+  function nextModal() {
+    const m = modalQueue.shift();
+    if (!m) { $("modal-bg").classList.remove("show"); return; }
+    $("modal").className = "modal " + m.kind;
+    $("modal-title").textContent = m.title;
+    $("modal-body").innerHTML = m.items.map((it) =>
+      `<div class="it"><b>${esc(it.head)}</b><div>${esc(it.text)}</div></div>`).join("");
+    $("modal-bg").classList.add("show");
+    $("modal-ok").focus();
+  }
+
+  function renderResults(data) {
+    const res = data.results || [];
+    const cnt = { 등록: 0, 확인필요: 0, 중복: 0, 오류: 0 };
+    res.forEach((r) => cnt[r.kind] = (cnt[r.kind] || 0) + 1);
+    $("summary").innerHTML = Object.entries(cnt).map(([k, v]) => `<span class="chip k-${k}">${k} ${v}</span>`).join("");
+    $("rows").innerHTML = res.length ? res.map((r) =>
+      `<tr><td><span class="badge t-${esc(r.type_label)}">${esc(r.type_label)}</span></td>` +
+      `<td><span class="badge k-${esc(r.kind)}">${esc(r.kind)}</span></td>` +
+      `<td>${esc(r.file)}</td><td class="key">${esc(r.key)}</td><td class="msg">${esc(r.msg)}</td></tr>`).join("")
+      : `<tr><td colspan="5" class="empty">처리된 파일이 없습니다.</td></tr>`;
+
+    const added = (t) => res.some((r) => r.type === t && (r.kind === "등록" || r.kind === "확인필요"));
+    renderLedger("ecn", data.ecn, added("ecn"));
+    renderLedger("approval", data.approval, added("approval"));
+
+    if (data.errors && data.errors.length)
+      showModal("err", "저장 오류", data.errors.map((e) => ({ head: "대장 저장 실패", text: e })));
+    const dups = res.filter((r) => r.kind === "중복");
+    if (dups.length)
+      showModal("dup", `중복 문서입니다 - 등록하지 않았습니다 (${dups.length}건)`,
+        dups.map((r) => ({ head: `[${r.type_label}] ${r.file}`, text: r.msg })));
+    const errs = res.filter((r) => r.kind === "오류");
+    if (errs.length)
+      showModal("err", `인식할 수 없는 파일 (${errs.length}건)`,
+        errs.map((r) => ({ head: r.file, text: r.msg })));
+  }
+
+  async function run() {
+    if (!picked.length) return;
+    const fd = new FormData();
+    picked.forEach((f) => fd.append("files", f, f.name));
+    $("run").disabled = true;
+    $("run").innerHTML = `<span class="spinner"></span>처리 중… (${picked.length}개)`;
+    try {
+      const r = await fetch("/api/process", { method: "POST", body: fd });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.error || r.statusText);
+      renderResults(data);
+      picked = [];
+      renderFiles();
+    } catch (e) {
+      showModal("err", "처리 실패", [{ head: "서버 오류", text: e.message || String(e) }]);
+    } finally {
+      $("run").textContent = "실행";
+      $("run").disabled = picked.length === 0;
+    }
+  }
+
+  const drop = $("drop");
+  drop.addEventListener("click", () => $("picker").click());
+  $("picker").addEventListener("change", (e) => { addFiles(e.target.files); e.target.value = ""; });
+  ["dragenter", "dragover"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add("over"); }));
+  ["dragleave", "drop"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
+  drop.addEventListener("drop", (e) => addFiles(e.dataTransfer.files));
+  window.addEventListener("dragover", (e) => e.preventDefault());
+  window.addEventListener("drop", (e) => e.preventDefault());
+  $("files").addEventListener("click", (e) => {
+    const i = e.target.dataset.i;
+    if (i !== undefined) { picked.splice(Number(i), 1); renderFiles(); }
+  });
+  $("clear").addEventListener("click", () => { picked = []; renderFiles(); });
+  $("run").addEventListener("click", run);
+  $("modal-ok").addEventListener("click", nextModal);
+  $("ecn-dl").addEventListener("click", () => { location.href = "/download/ecn"; });
+  $("approval-dl").addEventListener("click", () => { location.href = "/download/approval"; });
+  refresh().catch(() => {});
+})();
+</script>
+</body>
+</html>

@@ -1,8 +1,9 @@
-"""설계변경 통보서 PDF -> 엑셀 누적 관리대장 (설계변경_관리대장.xlsx)
+"""설계변경 통보서 PDF -> 엑셀 누적 관리대장 (<연도>년_SA_설계변경 관리대장_<MM.DD>.xlsx)
 
-사용:
-    python ecn_register.py               # 설변_수신함 폴더의 PDF 일괄 등록 (등록 후 보관 폴더로 이동)
-    python ecn_register.py a.pdf b.pdf   # 지정 파일 등록 (보관 폴더로 복사, 원본 유지)
+통합 앱(app.py)에서는 set_base() 로 저장 폴더를 지정한 뒤 register() 를 호출한다.
+단독 실행:
+    python ecn.py               # 설변_수신함 폴더의 PDF 일괄 등록 (등록 후 보관 폴더로 이동)
+    python ecn.py a.pdf b.pdf   # 지정 파일 등록 (보관 폴더로 복사, 원본 유지)
 """
 from __future__ import annotations
 
@@ -25,13 +26,21 @@ except ImportError as e:  # pragma: no cover
     print(f"[오류] 필요한 패키지가 없습니다: {e}\n설계변경_등록.bat 으로 실행해 주세요.")
     sys.exit(1)
 
-BASE = Path(__file__).resolve().parent
-LEDGER_LEGACY = BASE / "설계변경_관리대장.xlsx"      # v1.0 파일명 (발견 시 이어서 사용)
 LEDGER_GLOB = "*년_SA_설계변경 관리대장_*.xlsx"
-INBOX = BASE / "설변_수신함"
-ARCHIVE = BASE / "설변_보관"
-BACKUP = BASE / "백업"
 BACKUP_KEEP = 20
+
+
+def set_base(base) -> None:
+    """대장·보관·백업 폴더 위치 지정 (기본: 이 파일이 있는 폴더)."""
+    global BASE, LEDGER_LEGACY, INBOX, ARCHIVE, BACKUP
+    BASE = Path(base).resolve()
+    LEDGER_LEGACY = BASE / "설계변경_관리대장.xlsx"   # v1.0 파일명 (발견 시 이어서 사용)
+    INBOX = BASE / "설변_수신함"
+    ARCHIVE = BASE / "설변_보관"
+    BACKUP = BASE / "백업"
+
+
+set_base(Path(__file__).resolve().parent)
 
 FONT = "맑은 고딕"
 RES = 288                      # 체크박스 판별용 렌더링 해상도(dpi)
@@ -916,6 +925,129 @@ def collect(args):
     return list(dict.fromkeys(files))
 
 
+def current_ledger():
+    found = find_ledgers()
+    return found[0] if found else None
+
+
+def ledger_count(path) -> int:
+    if not path or not Path(path).exists():
+        return 0
+    wb = load_workbook(path, read_only=True)
+    try:
+        ws = wb["상세대장"] if "상세대장" in wb.sheetnames else None
+        return 0 if ws is None else sum(1 for r in ws.iter_rows(min_row=2, max_col=1, values_only=True) if r[0])
+    finally:
+        wb.close()
+
+
+def register(files, move=False, dup_dir=None, err_dir=None) -> dict:
+    """PDF 목록을 대장에 등록하고 결과를 돌려준다.
+
+    move    : True 면 등록된 PDF 를 보관 폴더로 이동, False 면 복사
+    dup_dir : 중복 PDF 를 옮길 폴더 (None 이면 그대로 둠)
+    err_dir : 인식 오류 PDF 를 옮길 폴더 (None 이면 그대로 둠)
+    결과 items : {"kind": 등록/확인필요/중복/오류, "file", "msg", "key"}
+    """
+    for d in (ARCHIVE, BACKUP):
+        d.mkdir(parents=True, exist_ok=True)
+    out = {"items": [], "added": 0, "total": 0, "ledger": None, "previous": None, "error": None}
+    ledgers = find_ledgers()
+    src = ledgers[0] if ledgers else None
+    out["previous"] = src.name if src else None
+    if src and is_locked(src):
+        out["error"] = f"{src.name} 파일이 열려 있습니다. 엑셀을 닫고 다시 실행해 주세요."
+        return out
+
+    ledger = Ledger(src)
+    seen_hash = {}
+    plan = []   # (pdf, dest) : 저장 성공 후 실행
+    items = out["items"]
+    for f in files:
+        f = Path(f)
+        try:
+            digest = sha256(f)
+        except OSError as e:
+            items.append({"kind": "오류", "file": f.name, "msg": f"파일 읽기 실패: {e}", "key": ""})
+            continue
+        if digest in seen_hash:
+            items.append({"kind": "중복", "file": f.name, "key": seen_hash[digest],
+                          "msg": f"이번에 함께 올린 파일과 동일 ({seen_hash[digest]})"})
+            plan.append((f, dup_dir))
+            continue
+        try:
+            rec = parse_pdf(f)
+        except FormError as e:
+            items.append({"kind": "오류", "file": f.name, "msg": str(e), "key": ""})
+            plan.append((f, err_dir))
+            continue
+        except Exception as e:  # 예상 못한 파싱 오류도 오류로 분류
+            items.append({"kind": "오류", "file": f.name, "msg": f"처리 실패: {type(e).__name__}: {e}", "key": ""})
+            plan.append((f, err_dir))
+            continue
+        old, why = ledger.find_dup(rec, digest)
+        if old:
+            reg = old.get("등록일시")
+            reg = reg.strftime("%Y-%m-%d %H:%M") if isinstance(reg, dt.datetime) else str(reg or "")
+            items.append({"kind": "중복", "file": f.name, "key": old.get("설변NO") or "",
+                          "msg": f"{why} - 이미 등록됨: {old.get('설변NO')} / {old.get('제목')} (등록 {reg})"})
+            plan.append((f, dup_dir))
+            continue
+        status = "정상" if not rec["누락"] else "확인필요 / 누락: " + ", ".join(rec["누락"])
+        dest = unique_target(ARCHIVE / str(rec["연도"]), f.name, digest)
+        ledger.add(rec, digest, str(dest), status)   # PC 절대경로 링크 (다운로드한 엑셀에서도 열림)
+        seen_hash[digest] = rec["설변NO"]
+        items.append({"kind": "등록" if status == "정상" else "확인필요", "file": f.name, "key": rec["설변NO"],
+                      "msg": f"{rec.get('제목', '')} | {rec.get('발생부서', '')} {rec.get('발의자', '')} | "
+                             f"{rec.get('구분', '')} | 적용 {rec.get('적용시기', '')}"
+                             + ("" if status == "정상" else f"  [{status}]")})
+        plan.append((f, dest))
+
+    added = sum(1 for it in items if it["kind"] in ("등록", "확인필요"))
+    out["added"] = added
+    target = src
+    if added:
+        ledger.rebuild()
+        target = BASE / ledger_name((ledger.years() or [dt.date.today().year])[-1], dt.date.today())
+        same = src is not None and src.resolve() == target.resolve()
+        try:
+            if not same and is_locked(target):
+                raise PermissionError(target.name)
+            if src:
+                backup(src)
+            ledger.save(target)
+        except PermissionError:
+            out["error"] = f"{target.name} 저장에 실패했습니다 (파일이 열려 있음). 엑셀을 닫고 다시 실행해 주세요."
+            out["added"] = 0
+            for it in items:
+                if it["kind"] in ("등록", "확인필요"):
+                    it["kind"], it["msg"] = "오류", "대장 저장 실패로 등록 취소"
+            return out
+        if src and not same:
+            src.unlink()          # 이전 날짜 파일명은 정리 (백업 폴더에 보관됨)
+
+    for pdf, dest in plan:   # 저장 성공 후에만 파일 이동/복사
+        if dest is None:
+            continue
+        dest = Path(dest)
+        if dest.suffix.lower() != ".pdf":     # 중복/오류 폴더
+            dest = unique_target(dest, pdf.name)
+        if dest.exists() and dest.resolve() == pdf.resolve():
+            continue
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        if move:
+            if dest.exists():
+                pdf.unlink()
+            else:
+                shutil.move(str(pdf), str(dest))
+        elif not dest.exists():
+            shutil.copy2(pdf, dest)
+
+    out["total"] = len(ledger.records)
+    out["ledger"] = target.name if target else None
+    return out
+
+
 def main(argv):
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -934,124 +1066,33 @@ def main(argv):
     if running_from_temp():
         alert("설계변경 등록 - 실행 위치 오류",
               "압축파일(zip) 안에서 바로 실행 중입니다.\n이 상태에서는 매번 새 임시 폴더에 저장되어 등록 내용이 누적되지 않습니다.\n\n"
-              "zip 파일 우클릭 → [압축 풀기] 로 고정 폴더(예: D:\\SA\\설계변경)에 푼 뒤\n그 폴더의 설계변경_등록.bat 을 실행해 주세요.")
+              "zip 파일 우클릭 → [압축 풀기] 로 고정 폴더에 푼 뒤 실행해 주세요.")
         return 3
-    ledgers = find_ledgers()
-    src = ledgers[0] if ledgers else None
-    if src:
-        print(f" 누적 대상 : {src.name}")
-        for other in ledgers[1:]:
-            print(f"   ※ 다른 대장 파일 무시 : {other.name} (최근 저장 파일 기준으로 누적)")
-    else:
-        print(" 누적 대상 : (없음) 새 관리대장 생성")
-    if src and is_locked(src):
-        alert("설계변경 등록 - 저장 불가",
-              f"{src.name} 파일이 열려 있습니다.\n엑셀을 닫고 다시 실행해 주세요.\n(PDF 는 이동되지 않았습니다)")
+    res = register(files, move=inbox_mode,
+                   dup_dir=INBOX / "중복" if inbox_mode else None,
+                   err_dir=INBOX / "오류" if inbox_mode else None)
+    if res["error"]:
+        alert("설계변경 등록 - 저장 불가", res["error"] + "\n(PDF 는 이동되지 않았습니다)")
         return 2
-
-    ledger = Ledger(src)
-    seen_hash = {}
-    plan, results, dups = [], [], []   # plan: (src, dest) 저장 성공 후 실행
-    for f in files:
-        try:
-            digest = sha256(f)
-        except OSError as e:
-            results.append(("오류", f.name, f"파일 읽기 실패: {e}"))
-            continue
-        if digest in seen_hash:
-            msg = f"이번 실행에서 이미 등록한 파일과 동일 ({seen_hash[digest]})"
-            dups.append(f"{f.name}\n   → {msg}")
-            results.append(("중복", f.name, msg))
-            plan.append((f, INBOX / "중복" if inbox_mode else None))
-            continue
-        try:
-            rec = parse_pdf(f)
-        except FormError as e:
-            results.append(("오류", f.name, str(e)))
-            plan.append((f, INBOX / "오류" if inbox_mode else None))
-            continue
-        except Exception as e:  # 예상 못한 파싱 오류도 오류 폴더로
-            results.append(("오류", f.name, f"처리 실패: {type(e).__name__}: {e}"))
-            plan.append((f, INBOX / "오류" if inbox_mode else None))
-            continue
-        old, why = ledger.find_dup(rec, digest)
-        if old:
-            reg = old.get("등록일시")
-            reg = reg.strftime("%Y-%m-%d %H:%M") if isinstance(reg, dt.datetime) else str(reg or "")
-            msg = f"{why} - 이미 등록됨: {old.get('설변NO')} / {old.get('제목')} (등록 {reg})"
-            dups.append(f"{f.name}\n   → {msg}")
-            results.append(("중복", f.name, msg))
-            plan.append((f, INBOX / "중복" if inbox_mode else None))
-            continue
-        status = "정상" if not rec["누락"] else "확인필요 / 누락: " + ", ".join(rec["누락"])
-        dest = unique_target(ARCHIVE / str(rec["연도"]), f.name, digest)
-        link = dest.relative_to(BASE).as_posix()
-        ledger.add(rec, digest, link, status)
-        seen_hash[digest] = rec["설변NO"]
-        results.append(("등록" if status == "정상" else "확인필요", f.name, f"{rec['설변NO']} {rec.get('제목', '')}"
-                        + ("" if status == "정상" else f"  [{status}]")))
-        plan.append((f, dest))
-
-    added = sum(1 for r in results if r[0] in ("등록", "확인필요"))
-    target = None
-    if added:
-        ledger.rebuild()
-        target = BASE / ledger_name((ledger.years() or [dt.date.today().year])[-1], dt.date.today())
-        same = src is not None and src.resolve() == target.resolve()
-        try:
-            if not same and is_locked(target):
-                raise PermissionError(target.name)
-            if src:
-                backup(src)
-            ledger.save(target)
-        except PermissionError:
-            alert("설계변경 등록 - 저장 불가",
-                  f"{target.name} 저장에 실패했습니다 (파일이 열려 있음).\n엑셀을 닫고 다시 실행해 주세요.\n(PDF 는 이동되지 않았습니다)")
-            return 2
-        if src and not same:
-            src.unlink()          # 이전 날짜 파일명은 정리 (백업 폴더에 보관됨)
-
-    for pdf, dest in plan:   # 저장 성공 후에만 파일 이동/복사
-        if dest is None:
-            continue
-        if dest.suffix.lower() != ".pdf":     # 중복/오류 폴더
-            dest = unique_target(dest, pdf.name)
-        if dest.exists() and dest.resolve() == pdf.resolve():
-            continue
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        if inbox_mode:
-            if dest.exists():
-                pdf.unlink()
-            else:
-                shutil.move(str(pdf), str(dest))
-        elif not dest.exists():
-            shutil.copy2(pdf, dest)
-
     print()
-    for kind, name, msg in results:
-        print(f"  [{kind:^5}] {name}\n           {msg}")
-    cnt = {k: sum(1 for r in results if r[0] == k) for k in ("등록", "확인필요", "중복", "오류")}
+    for it in res["items"]:
+        print(f"  [{it['kind']:^5}] {it['file']}\n           {it['key']} {it['msg']}")
+    cnt = {k: sum(1 for it in res["items"] if it["kind"] == k) for k in ("등록", "확인필요", "중복", "오류")}
     print("\n" + "-" * 64)
     print(f" 등록 {cnt['등록']}건 | 확인필요 {cnt['확인필요']}건 | 중복 {cnt['중복']}건 | 오류 {cnt['오류']}건")
-    if target:
-        print(f" 저장: {target}  (누적 총 {len(ledger.records)}건)")
-    print("-" * 64)
-
-    if target:
+    if res["added"]:
+        print(f" 저장: {BASE / res['ledger']}  (누적 총 {res['total']}건)")
         alert("설계변경 등록 - 완료",
-              f"이번 등록 {added}건 / 누적 총 {len(ledger.records)}건\n\n저장 파일 : {target.name}"
-              + (f"\n(이전 파일 {src.name} → 새 파일명으로 변경, 이전본은 백업 폴더 보관)" if src and src.name != target.name else ""),
-              error=False)
+              f"이번 등록 {res['added']}건 / 누적 총 {res['total']}건\n\n저장 파일 : {res['ledger']}", error=False)
+    print("-" * 64)
+    dups = [it for it in res["items"] if it["kind"] == "중복"]
     if dups:
         alert("설계변경 등록 - 중복 PDF",
               f"이미 등록된 설계변경 통보서입니다. 등록하지 않았습니다. ({len(dups)}건)\n\n"
-              + "\n\n".join(dups[:10]) + ("\n\n…" if len(dups) > 10 else "")
-              + (f"\n\n※ 수신함 PDF 는 '{INBOX.name}\\중복' 폴더로 이동했습니다." if inbox_mode else ""))
-    errs = [r for r in results if r[0] == "오류"]
+              + "\n\n".join(f"{it['file']}\n   → {it['msg']}" for it in dups[:10]))
+    errs = [it for it in res["items"] if it["kind"] == "오류"]
     if errs:
-        alert("설계변경 등록 - 인식 오류",
-              "\n\n".join(f"{n}\n   → {m}" for _, n, m in errs[:10])
-              + (f"\n\n※ 수신함 PDF 는 '{INBOX.name}\\오류' 폴더로 이동했습니다." if inbox_mode else ""))
+        alert("설계변경 등록 - 인식 오류", "\n\n".join(f"{it['file']}\n   → {it['msg']}" for it in errs[:10]))
     return 0
 
 
